@@ -189,7 +189,7 @@
                 <Separator Margin="0,0,0,8"/>
 
                 <!-- Save -->
-                <DockPanel>
+                <DockPanel Margin="0,0,0,12">
                     <TextBlock DockPanel.Dock="Left" Text="Unsaved changes"
                                Foreground="Orange" VerticalAlignment="Center" Margin="0,0,10,0"
                                Visibility="{Binding Editor.IsDirty, Converter={StaticResource BoolVisConverter}}"/>
@@ -197,6 +197,67 @@
                             Command="{Binding SaveProfileCommand}"
                             Padding="14,5" Background="#3CB371" Foreground="White"/>
                 </DockPanel>
+
+                <!-- Handle Watcher debug panel -->
+                <Expander IsExpanded="False" Margin="0,0,0,8"
+                          DataContext="{Binding HandleWatcher}">
+                    <Expander.Header>
+                        <TextBlock>
+                            <Run Text="Handle Watcher" FontWeight="SemiBold"/>
+                            <Run Text=" — debug tool to verify device enumeration for this game"
+                                 Foreground="Gray" FontSize="11"/>
+                        </TextBlock>
+                    </Expander.Header>
+
+                    <Border BorderBrush="#DDD" BorderThickness="1" Padding="8" Margin="0,4,0,0">
+                        <DockPanel>
+                            <!-- Controls -->
+                            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                                <Button DockPanel.Dock="Right" Content="Clear"
+                                        Command="{Binding ClearCommand}" Padding="8,3" Margin="4,0,0,0"/>
+                                <Button DockPanel.Dock="Right" Content="Copy All"
+                                        Command="{Binding CopyAllCommand}" Padding="8,3" Margin="4,0,0,0"/>
+                                <Button DockPanel.Dock="Right" Content="Stop"
+                                        Command="{Binding StopCommand}" Padding="8,3" Margin="4,0,0,0"/>
+                                <Button DockPanel.Dock="Right" Content="Start"
+                                        Command="{Binding StartCommand}" Padding="8,3" Margin="4,0,0,0"/>
+                                <CheckBox DockPanel.Dock="Right" Content="All handles"
+                                          IsChecked="{Binding DiagnosticMode}"
+                                          VerticalAlignment="Center" Margin="8,0,0,0"
+                                          ToolTip="Also show all \Device\ handles beyond HID and DirectInput.&#x0a;Normal mode captures \Device\HID* (RawInput/WGI games) and&#x0a;\Registry\...\DirectInput\* (DirectInput games like FH6) automatically."/>
+                                <TextBox DockPanel.Dock="Right" Width="180"
+                                         Text="{Binding ProcessName, UpdateSourceTrigger=PropertyChanged}"
+                                         Margin="4,0,0,0" VerticalContentAlignment="Center"
+                                         ToolTip="Auto-filled from the profile's game executable name"/>
+                                <TextBlock DockPanel.Dock="Right" Text="Process:"
+                                           VerticalAlignment="Center" Margin="4,0,4,0"/>
+                                <TextBlock Text="{Binding StatusText}" Foreground="Gray"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                            </DockPanel>
+
+                            <!-- Poll stats -->
+                            <TextBlock DockPanel.Dock="Top" Text="{Binding PollStats}"
+                                       Foreground="Gray" FontSize="10" Margin="0,0,0,4"/>
+
+                            <!-- Event log -->
+                            <ListView ItemsSource="{Binding Events}" Height="140"
+                                      FontFamily="Consolas" FontSize="11"
+                                      BorderThickness="1" BorderBrush="#DDD"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                <ListView.View>
+                                    <GridView>
+                                        <GridViewColumn Header="Time"   Width="90"
+                                                        DisplayMemberBinding="{Binding Timestamp}"/>
+                                        <GridViewColumn Header="Device" Width="200"
+                                                        DisplayMemberBinding="{Binding DeviceName}"/>
+                                        <GridViewColumn Header="Handle path"
+                                                        DisplayMemberBinding="{Binding Path}"/>
+                                    </GridView>
+                                </ListView.View>
+                            </ListView>
+                        </DockPanel>
+                    </Border>
+                </Expander>
 
             </StackPanel>
         </ScrollViewer>

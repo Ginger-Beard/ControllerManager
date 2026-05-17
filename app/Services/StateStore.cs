@@ -36,16 +36,22 @@ public sealed class StateStore(string path)
     }
 
     public void RecordDisabled(HidDevice device)
+        => RecordDisabledCore(device.InstanceId, device.FriendlyName);
+
+    public void RecordDisabledRef(Models.DeviceRef device)
+        => RecordDisabledCore(device.InstanceId, device.FriendlyName);
+
+    private void RecordDisabledCore(string instanceId, string friendlyName)
     {
         lock (_lock)
         {
             var entries = Load();
-            if (!entries.Any(e => e.InstanceId == device.InstanceId))
+            if (!entries.Any(e => e.InstanceId == instanceId))
             {
                 entries.Add(new DisabledEntry
                 {
-                    InstanceId   = device.InstanceId,
-                    FriendlyName = device.FriendlyName,
+                    InstanceId    = instanceId,
+                    FriendlyName  = friendlyName,
                     DisabledAtUtc = DateTime.UtcNow,
                 });
                 Save(entries);
@@ -53,12 +59,14 @@ public sealed class StateStore(string path)
         }
     }
 
-    public void ClearEnabled(HidDevice device)
+    public void ClearEnabled(HidDevice device) => ClearEnabledById(device.InstanceId);
+
+    public void ClearEnabledById(string instanceId)
     {
         lock (_lock)
         {
             var entries = Load();
-            entries.RemoveAll(e => e.InstanceId == device.InstanceId);
+            entries.RemoveAll(e => e.InstanceId == instanceId);
             Save(entries);
         }
     }

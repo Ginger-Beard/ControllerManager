@@ -23,7 +23,12 @@ public sealed class GamesViewModel : ViewModelBase
             if (Set(ref _selectedProfile, value))
             {
                 HasSelection = value is not null;
-                if (value is not null) Editor.LoadProfile(value);
+                if (value is not null)
+                {
+                    Editor.LoadProfile(value);
+                    if (!string.IsNullOrEmpty(value.GameExecutableName))
+                        HandleWatcher.ProcessName = value.GameExecutableName;
+                }
             }
         }
     }
@@ -34,7 +39,8 @@ public sealed class GamesViewModel : ViewModelBase
         private set => Set(ref _hasSelection, value);
     }
 
-    public ProfileEditorViewModel Editor { get; }
+    public ProfileEditorViewModel  Editor         { get; }
+    public HandleWatcherViewModel  HandleWatcher  { get; }
 
     public ICommand NewProfileCommand    { get; }
     public ICommand DeleteProfileCommand { get; }
@@ -45,7 +51,8 @@ public sealed class GamesViewModel : ViewModelBase
     {
         _store    = store;
         _profiles = store.Load();
-        Editor    = new ProfileEditorViewModel(devices.Devices);
+        Editor        = new ProfileEditorViewModel(devices.Devices);
+        HandleWatcher = new HandleWatcherViewModel(devices.Devices);
 
         foreach (var p in _profiles) Profiles.Add(p);
 
