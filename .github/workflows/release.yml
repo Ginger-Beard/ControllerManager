@@ -4,7 +4,9 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -27,3 +29,4 @@ jobs:
         with:
           files: publish/HIDReorder.exe
           generate_release_notes: true
+          overwrite: true
