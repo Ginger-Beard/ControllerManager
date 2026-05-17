@@ -1,0 +1,21 @@
+# Build output
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+.vs/
+
+# Rider
+.idea/
+
+# Publish output
+publish/
+
+# Local app data / runtime files
+*.json.bak
+
+# OS
+.DS_Store
+Thumbs.db
