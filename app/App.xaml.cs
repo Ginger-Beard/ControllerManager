@@ -12,19 +12,46 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        var appData = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "HIDReorder");
-        Directory.CreateDirectory(appData);
+        DispatcherUnhandledException += (_, ex) =>
+        {
+            System.Windows.MessageBox.Show(
+                ex.Exception.ToString(),
+                "HID Reorder — Unhandled Error",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error);
+            ex.Handled = true;
+            Shutdown(1);
+        };
 
-        State        = new StateStore(Path.Combine(appData, "state.json"));
-        ProfileStore = new ProfileStore(Path.Combine(appData, "profiles.json"));
-        State.RecoverOnStartup();
+        AppDomain.CurrentDomain.UnhandledException += (_, ex) =>
+            System.Windows.MessageBox.Show(
+                ex.ExceptionObject.ToString(),
+                "HID Reorder — Fatal Error",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error);
 
-        // TODO: mutex check + IPC client for single-instance
-        // TODO: CLI arg dispatch (--launch, --steam-wrap, --restore-all)
+        try
+        {
+            var appData = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "HIDReorder");
+            Directory.CreateDirectory(appData);
 
-        new Views.MainWindow().Show();
+            State        = new StateStore(Path.Combine(appData, "state.json"));
+            ProfileStore = new ProfileStore(Path.Combine(appData, "profiles.json"));
+            State.RecoverOnStartup();
+
+            new Views.MainWindow().Show();
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(
+                ex.ToString(),
+                "HID Reorder — Startup Error",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error);
+            Shutdown(1);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
