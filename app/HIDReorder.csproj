@@ -22,8 +22,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="..\vid-names.json" Link="vid-names.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
+    <EmbeddedResource Include="..\vid-names.json" Link="vid-names.json"/>
   </ItemGroup>
 </Project>

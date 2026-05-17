@@ -9,8 +9,7 @@ public sealed class MainViewModel : ViewModelBase
 
     public MainViewModel()
     {
-        var appDir   = AppContext.BaseDirectory;
-        var resolver = new VidResolver(Path.Combine(appDir, "vid-names.json"));
+        var resolver = new VidResolver();
 
         Devices = new DevicesViewModel(new DeviceEnumerator(resolver));
         Games   = new GamesViewModel(App.ProfileStore, Devices);
