@@ -1,19 +1,33 @@
 # HID Reorder
 
-Fix for games (Forza Horizon 6, others) that send force feedback or rumble **only to the first enumerated HID game controller**. If Windows enumerates your wheel base second, you get zero FFB.
+A per-game HID device profile manager for sim racing and controller games. Define profiles that automatically disable interfering devices before a game launches — so your wheel base always gets enumerated first — then re-enable them one by one as the game picks them up.
 
+Think HidHide, but per-game and automatic instead of a global toggle.
+
+
+---
+
+## The problem
+
+Forza Horizon 5/6 (and others) assign FFB output to whichever HID game controller enumerates first at startup. If Windows enumerates your handbrake or pedals before your wheel base, you get zero FFB. The "unplug everything and replug your wheel first" community fix is solving exactly this — it's just tedious to do every session.
+
+Same problem affects iRacing setups with many devices, older Codemasters titles, Dakar Rally, and any game that gets confused by multiple controllers.
 
 ---
 
 ## How it works
 
-Windows assigns game controller slot numbers in the order devices enumerate at boot. That order can shift after any reboot, USB reconnect, or driver update. This tool:
+Each **game profile** defines three device categories:
 
-1. Disables all your sim racing HID devices simultaneously
-2. Re-enables your wheel base first — it claims slot #1
-3. Re-enables everything else in the order you set
+| Category | What it does |
+|---|---|
+| **Keep Enabled** | Never touched — your wheel base goes here |
+| **Disable → Re-enable** | Disabled before launch; re-enabled one by one as the game opens HID handles |
+| **Keep Disabled** | Disabled for the whole session; re-enabled only when the game exits (for controller games where you want the sim rig hidden entirely) |
 
-Devices are matched by USB Vendor ID (VID) and Product ID (PID), so it doesn't matter which physical port anything is plugged into.
+Unassigned devices are ignored — the profile only touches what you explicitly put in a list.
+
+The re-enable sequence uses **handle watching**: the app monitors which HID handles the game process opens, and re-enables the next device only after the game acknowledges the previous one. No fixed timers, no guessing.
 
 ---
 
@@ -26,75 +40,97 @@ Devices are matched by USB Vendor ID (VID) and Product ID (PID), so it doesn't m
 
 ## Getting started
 
-Download `HidReorder.exe` from [Releases](../../releases) and run it. UAC will prompt for admin — that's required to disable and re-enable devices.
+Download `HIDReorder.exe` from [Releases](../../releases) and run it.
 
-### Device Order tab
+### Games tab
 
-Detected sim devices populate automatically. From here:
+Create a profile per game:
 
-- **Drag** the handle on the left to reorder — the top device becomes slot #1
-- **Check/uncheck** devices to include or exclude them. Unchecked devices get disabled and stay disabled, which is useful for hiding devices from games entirely without needing HidHide
-- **Save named profiles** for different setups — sim rig, couch gaming, whatever. Select a profile from the dropdown to apply it, type a new name and hit Save to create one
-- Hit **Reorder Devices** — everything briefly disconnects and comes back in the order you set
+1. Click **+** to create a new profile
+2. Set a name and browse to the game's `.exe`
+3. In **Detected Devices**, select your wheel base → click **→ Keep Enabled**
+4. Select pedals, handbrake, etc. → click **→ Disable → Re-enable** (in the order you want them restored)
+5. For controller games: put your whole sim rig under **→ Keep Disabled**
+6. Choose a re-enable trigger (Handle Watcher recommended; Timer as fallback)
+7. Click **Save Profile**
 
-Run this before launching your game each session.
+### Launching
 
-### Drift Monitor tab
+Three ways to trigger a profile:
 
-Shows live axis readings across all detected joystick devices. Any axis sitting more than N% from center gets flagged red. Use this to find which device is sending constant input and interfering with your games.
+- **In-app Launch button** (Dashboard tab) — good for testing
+- **Steam Launch Options** — paste the generated command (`%command%` wrapper) so Steam handles it automatically every time
+- **Desktop shortcut** — generated from the Games tab for non-Steam games
 
-Common causes: dirty potentiometer, needs calibration via `joy.cpl`, or the device's own software needs a deadzone set.
+### Devices tab
+
+Live list of all detected HID devices. Click the ON/OFF button to enable or disable individual devices directly. Click an instance ID to copy it. Toggle "Show all HID" to see keyboards, mice, and other non-gamepad devices.
 
 ---
 
 ## Identifying your devices
 
-The app auto-detects game controllers but most show up with generic names like "HID-compliant game controller". The VID (Vendor ID) in brackets tells you who made it. Here are the VIDs for common sim racing brands:
+Most devices enumerate with generic names. The VID in brackets tells you who made it:
 
-| Brand | VID | Notes |
-|-------|-----|-------|
-| MOZA Racing | `VID_346E` | All bases |
-| Simagic | `VID_3670` | Alpha, GT4, DX8, handbrakes |
-| Fanatec | `VID_0EB7` | All Fanatec devices |
-| Heusinkveld | `VID_0483` | STM32 chip — see note |
-| Simucube / Granite | `VID_16D0` | SC1, SC2 |
-| Thrustmaster | `VID_044F` | All wheels |
-| Logitech | `VID_046D` | G29, G923 |
-| Asetek SimSports | `VID_2433` | Invicta, Forte |
-| Cube Controls | `VID_0483` | STM32 — use PID to distinguish |
-| Cammus | `VID_3416` | C5, C12 |
-| VRS DirectForce | `VID_0483` | STM32 — use PID to distinguish |
+| Brand | VID |
+|---|---|
+| MOZA Racing | `VID_346E` |
+| Simagic | `VID_3670` |
+| Fanatec | `VID_0EB7` |
+| Heusinkveld | `VID_30B7` |
+| Simucube / Granite Devices | `VID_16D0` |
+| Thrustmaster | `VID_044F` |
+| Logitech | `VID_046D` |
+| Asetek SimSports | `VID_2433` |
+| Cammus | `VID_3416` |
+| STM32 devices (Cube Controls, VRS, etc.) | `VID_0483` |
 
-> **STM32 note:** `VID_0483` is STMicroelectronics' chip, used by Heusinkveld, Cube Controls, VRS, and others. If you have multiple `VID_0483` devices they'll show as separate entries distinguished by PID.
+Can't tell devices apart? Unplug one, hit Refresh, see what disappears.
 
-**Can't figure out which device is which?** Unplug one, hit Refresh, see what disappears. Repeat.
+VID not listed? Look it up at [usb-ids.gowdy.us](https://usb-ids.gowdy.us/) and add it to `vid-names.json` via PR.
 
-**VID not showing a name?** Look it up at [usb-ids.gowdy.us](https://usb-ids.gowdy.us/) and add it to `vid-names.json` via PR.
+---
+
+## Forza Horizon 5 / 6 specific notes
+
+- FH5/FH6 route HID through `gameinputsvc.exe` — the app watches that process, not the game itself
+- MOZA wheels need **Forza Compatibility Mode** enabled in MOZA Pit House — this makes the base present as a Fanatec device (VID `0EB7`), which FH6 detects via its native Fanatec SDK
+- Put your MOZA base in **Keep Enabled**, everything else in **Disable → Re-enable**
 
 ---
 
 ## Troubleshooting
 
-**FFB still not working after reordering**
-Run before launching the game, not after. Some titles also need the wheel re-assigned in in-game settings after a reorder.
+**FFB still not working**
+Make sure you launch the game through this app (or the Steam wrapper), not directly. The devices need to be disabled *before* the game starts enumerating.
 
 **A device didn't come back**
-Wait 5–10 seconds — some devices are slow to enumerate. Still missing: unplug and replug, then hit Refresh. If you unchecked it intentionally, check it and reorder again to bring it back.
+Hit **Restore All** in the Dashboard tab — it re-enables everything the app has disabled. Also runs automatically on next app launch if the app crashed mid-session.
 
-**My wheel base VID isn't in the table**
-Look it up at [the-sz.com/products/usbid](https://www.the-sz.com/products/usbid/). Or check the manufacturer's own GitHub or forums — most publish their VID.
+**Device not showing up in the list**
+Hit Refresh. If it still doesn't appear, try enabling "Show all HID" — it may be enumerated under an unexpected class. vJoy and ViGEm virtual devices are supported.
 
 ---
 
 ## Contributing
 
 PRs welcome for:
-- Confirmed VIDs for brands not in the table — add to `vid-names.json`
-- Bug fixes or improvements to the app
-- Better device detection or naming
+- VID/PID entries for brands not in `vid-names.json`
+- Bug fixes or improvements
+- Community game profiles
+
+---
+
+## Project layout
+
+```
+/app             — WPF app (active development)
+/gui             — original WinForms prototype (preserved, not extended)
+/vid-names.json  — shared VID/PID vendor name map
+```
 
 ---
 
 ## Credits
 
-- VID data in `vid-names.json` was manually curated for sim racing hardware. The broader community-maintained USB vendor ID database lives at [github.com/gregkh/usbutils](https://github.com/gregkh/usbutils) — if you're looking up an unknown VID or want to contribute one upstream, that's the place
+- VID data curated for sim racing hardware; upstream database at [github.com/gregkh/usbutils](https://github.com/gregkh/usbutils)

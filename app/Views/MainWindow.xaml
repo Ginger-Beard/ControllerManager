@@ -1,0 +1,161 @@
+<Window x:Class="HIDReorder.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:HIDReorder.ViewModels"
+        xmlns:local="clr-namespace:HIDReorder.Views"
+        Title="HID Reorder" Height="620" Width="860"
+        MinHeight="480" MinWidth="640"
+        WindowStartupLocation="CenterScreen">
+    <Window.DataContext>
+        <vm:MainViewModel/>
+    </Window.DataContext>
+
+    <Grid>
+        <TabControl>
+
+            <!-- ── Dashboard ──────────────────────────────────────────────── -->
+            <TabItem Header="Dashboard">
+                <Grid Margin="12">
+                    <TextBlock Text="Dashboard — coming soon"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="Gray" FontSize="14"/>
+                </Grid>
+            </TabItem>
+
+            <!-- ── Games ──────────────────────────────────────────────────── -->
+            <TabItem Header="Games" DataContext="{Binding Games}">
+                <local:GamesView/>
+            </TabItem>
+
+            <!-- ── Devices ────────────────────────────────────────────────── -->
+            <TabItem Header="Devices" DataContext="{Binding Devices}">
+                <DockPanel Margin="8">
+
+                    <!-- Toolbar -->
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                        <CheckBox DockPanel.Dock="Right"
+                                  Content="Show all HID"
+                                  IsChecked="{Binding ShowAllHid}"
+                                  VerticalAlignment="Center"
+                                  Margin="8,0,0,0"/>
+                        <Button Content="Refresh"
+                                Command="{Binding RefreshCommand}"
+                                DockPanel.Dock="Right"
+                                Padding="12,4" Margin="4,0,0,0"/>
+                        <TextBlock Text="{Binding StatusText}"
+                                   VerticalAlignment="Center"
+                                   Foreground="Gray"/>
+                    </DockPanel>
+
+                    <!-- Device list -->
+                    <ListView ItemsSource="{Binding Devices}"
+                              SelectedItem="{Binding SelectedDevice}"
+                              BorderThickness="1"
+                              BorderBrush="#CCCCCC">
+                        <ListView.View>
+                            <GridView>
+
+                                <!-- State dot -->
+                                <GridViewColumn Width="28">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Ellipse Width="10" Height="10">
+                                                <Ellipse.Style>
+                                                    <Style TargetType="Ellipse">
+                                                        <Setter Property="Fill" Value="#3CB371"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsEnabled}" Value="False">
+                                                                <Setter Property="Fill" Value="#BBBBBB"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Ellipse.Style>
+                                            </Ellipse>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+
+                                <!-- Friendly name -->
+                                <GridViewColumn Header="Device" Width="320"
+                                                DisplayMemberBinding="{Binding FriendlyName}"/>
+
+                                <!-- VID:PID badge -->
+                                <GridViewColumn Header="VID:PID" Width="90">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding VidPidShort}"
+                                                       FontFamily="Consolas"
+                                                       FontSize="11"
+                                                       Foreground="#555"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+
+                                <!-- Enable/disable toggle -->
+                                <GridViewColumn Header="State" Width="80">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Button Padding="8,2"
+                                                    Command="{Binding DataContext.ToggleEnabledCommand,
+                                                              RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                    CommandParameter="{Binding}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button">
+                                                        <Setter Property="Content" Value="ON"/>
+                                                        <Setter Property="Background" Value="#3CB371"/>
+                                                        <Setter Property="Foreground" Value="White"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsEnabled}" Value="False">
+                                                                <Setter Property="Content" Value="OFF"/>
+                                                                <Setter Property="Background" Value="#DDDDDD"/>
+                                                                <Setter Property="Foreground" Value="#444"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+
+                                <!-- Instance ID (click to copy) -->
+                                <GridViewColumn Header="Instance ID" Width="240">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding InstanceId}"
+                                                       FontFamily="Consolas"
+                                                       FontSize="10"
+                                                       Foreground="#777"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding InstanceId}"
+                                                       Cursor="Hand">
+                                                <TextBlock.InputBindings>
+                                                    <MouseBinding MouseAction="LeftClick"
+                                                                  Command="{Binding DataContext.CopyInstanceIdCommand,
+                                                                            RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                </TextBlock.InputBindings>
+                                            </TextBlock>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                </DockPanel>
+            </TabItem>
+
+            <!-- ── Settings ───────────────────────────────────────────────── -->
+            <TabItem Header="Settings">
+                <Grid Margin="12">
+                    <TextBlock Text="Settings — coming soon"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="Gray" FontSize="14"/>
+                </Grid>
+            </TabItem>
+
+        </TabControl>
+    </Grid>
+</Window>
