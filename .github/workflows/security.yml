@@ -1,0 +1,77 @@
+name: Security Scan
+
+# Disabled until repo goes public (CodeQL requires GitHub Advanced Security for private repos).
+# To enable: add the triggers below and uncomment the schedule.
+#
+# on:
+#   push:
+#     branches: [main]
+#   pull_request:
+#     branches: [main]
+#   schedule:
+#     - cron: '0 8 * * 1'  # Weekly Monday 08:00 UTC
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ── CodeQL static analysis ──────────────────────────────────────────────────
+  codeql:
+    name: CodeQL (C#)
+    runs-on: windows-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: csharp
+          queries: security-and-quality
+
+      - name: Build for CodeQL
+        run: dotnet build app/HIDReorder.csproj -c Release
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:csharp
+
+  # ── NuGet dependency vulnerability check ────────────────────────────────────
+  dependency-audit:
+    name: Dependency Audit
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore packages
+        run: dotnet restore app/HIDReorder.csproj
+
+      - name: Audit for vulnerable packages
+        shell: pwsh
+        run: |
+          $output = dotnet list app/HIDReorder.csproj package --vulnerable --include-transitive 2>&1
+          Write-Host $output
+          if (($output -join "`n") -match "has the following vulnerable packages") {
+            Write-Error "Vulnerable NuGet packages detected — review output above."
+            exit 1
+          }
+          Write-Host "No vulnerable packages found."
