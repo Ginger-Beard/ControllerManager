@@ -188,7 +188,19 @@
 
                 <Separator Margin="0,0,0,8"/>
 
-                <!-- Save -->
+                <!-- Shortcuts -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <Button Content="Create Desktop Shortcut"
+                            Command="{Binding CreateDesktopShortcutCommand}"
+                            Padding="10,4"
+                            ToolTip="Creates a .lnk on the Desktop that launches this profile directly."/>
+                    <Button Content="Add to Start Menu"
+                            Command="{Binding CreateStartMenuShortcutCommand}"
+                            Padding="10,4" Margin="6,0,0,0"
+                            ToolTip="Creates a .lnk in the Start Menu Programs folder."/>
+                </StackPanel>
+
+                <!-- Save + Steam command -->
                 <DockPanel Margin="0,0,0,12">
                     <TextBlock DockPanel.Dock="Left" Text="Unsaved changes"
                                Foreground="Orange" VerticalAlignment="Center" Margin="0,0,10,0"
@@ -196,6 +208,10 @@
                     <Button DockPanel.Dock="Right" Content="Save Profile"
                             Command="{Binding SaveProfileCommand}"
                             Padding="14,5" Background="#3CB371" Foreground="White"/>
+                    <Button DockPanel.Dock="Right" Content="Copy Steam Command"
+                            Command="{Binding CopySteamCommandCommand}"
+                            Padding="14,5" Margin="0,0,8,0"
+                            ToolTip="Copies the Steam Launch Options command to clipboard.&#x0a;Paste it into Steam → Right-click game → Properties → Launch Options."/>
                 </DockPanel>
 
                 <!-- Handle Watcher debug panel -->

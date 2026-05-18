@@ -42,10 +42,13 @@ public sealed class GamesViewModel : ViewModelBase
     public ProfileEditorViewModel  Editor         { get; }
     public HandleWatcherViewModel  HandleWatcher  { get; }
 
-    public ICommand NewProfileCommand    { get; }
-    public ICommand DeleteProfileCommand { get; }
-    public ICommand SaveProfileCommand   { get; }
-    public ICommand BrowseExeCommand     { get; }
+    public ICommand NewProfileCommand              { get; }
+    public ICommand DeleteProfileCommand           { get; }
+    public ICommand SaveProfileCommand             { get; }
+    public ICommand BrowseExeCommand               { get; }
+    public ICommand CopySteamCommandCommand        { get; }
+    public ICommand CreateDesktopShortcutCommand   { get; }
+    public ICommand CreateStartMenuShortcutCommand { get; }
 
     public GamesViewModel(ProfileStore store, DevicesViewModel devices)
     {
@@ -100,5 +103,48 @@ public sealed class GamesViewModel : ViewModelBase
             if (dlg.ShowDialog() == true)
                 Editor.ExePath = dlg.FileName;
         });
+
+        CopySteamCommandCommand = new RelayCommand(_ =>
+        {
+            if (_selectedProfile is null) return;
+            var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName
+                   ?? "HIDReorder.exe";
+            var cmd = $"\"{exe}\" --steam-wrap {_selectedProfile.Id} -- %command%";
+            System.Windows.Clipboard.SetText(cmd);
+        }, _ => _selectedProfile is not null);
+
+        CreateDesktopShortcutCommand = new RelayCommand(_ =>
+        {
+            if (_selectedProfile is null) return;
+            try
+            {
+                var path = Services.ShortcutExporter.DesktopPath(_selectedProfile.Name);
+                Services.ShortcutExporter.CreateShortcut(path, _selectedProfile.Id, _selectedProfile.GameExecutablePath);
+                System.Windows.MessageBox.Show($"Shortcut created:\n{path}", "HID Reorder",
+                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"Failed: {ex.Message}", "HID Reorder",
+                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+            }
+        }, _ => _selectedProfile is not null);
+
+        CreateStartMenuShortcutCommand = new RelayCommand(_ =>
+        {
+            if (_selectedProfile is null) return;
+            try
+            {
+                var path = Services.ShortcutExporter.StartMenuPath(_selectedProfile.Name);
+                Services.ShortcutExporter.CreateShortcut(path, _selectedProfile.Id, _selectedProfile.GameExecutablePath);
+                System.Windows.MessageBox.Show($"Shortcut created:\n{path}", "HID Reorder",
+                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"Failed: {ex.Message}", "HID Reorder",
+                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+            }
+        }, _ => _selectedProfile is not null);
     }
 }

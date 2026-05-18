@@ -23,11 +23,11 @@ Each **game profile** defines three device categories:
 |---|---|
 | **Keep Enabled** | Never touched — your wheel base goes here |
 | **Disable → Re-enable** | Disabled before launch; re-enabled one by one as the game opens HID handles |
-| **Keep Disabled** | Disabled for the whole session; re-enabled only when the game exits (for controller games where you want the sim rig hidden entirely) |
+| **Keep Disabled** | Disabled for the whole session; re-enabled only when the game exits |
 
-Unassigned devices are ignored — the profile only touches what you explicitly put in a list.
+Unassigned devices are ignored.
 
-The re-enable sequence uses **handle watching**: the app monitors which HID handles the game process opens, and re-enables the next device only after the game acknowledges the previous one. No fixed timers, no guessing.
+The re-enable sequence uses **handle watching**: the app monitors which HID device handles (or DirectInput registry keys) the game process opens, and re-enables the next device only after the game has acknowledged the previous one. No fixed timers, no guessing.
 
 ---
 
@@ -42,35 +42,58 @@ The re-enable sequence uses **handle watching**: the app monitors which HID hand
 
 Download `HIDReorder.exe` from [Releases](../../releases) and run it.
 
-### Games tab
-
-Create a profile per game:
+### Games tab — create a profile
 
 1. Click **+** to create a new profile
-2. Set a name and browse to the game's `.exe`
-3. In **Detected Devices**, select your wheel base → click **→ Keep Enabled**
-4. Select pedals, handbrake, etc. → click **→ Disable → Re-enable** (in the order you want them restored)
-5. For controller games: put your whole sim rig under **→ Keep Disabled**
-6. Choose a re-enable trigger (Handle Watcher recommended; Timer as fallback)
-7. Click **Save Profile**
+2. Enter a name and browse to the game's `.exe`
+3. In the **Detected Devices** picker, assign each device to a category:
+   - Wheel base → **Keep Enabled**
+   - Pedals, handbrake, shifter → **Disable → Re-enable** (drag to set restore order)
+   - Sim rig devices for controller games → **Keep Disabled**
+4. Choose a **re-enable trigger**:
+   - **Handle Watcher** (recommended) — re-enables each device as the game opens its handle
+   - **Timer** — re-enables after a fixed delay
+5. Click **Save Profile**
 
 ### Launching
 
-Three ways to trigger a profile:
+**Option 1 — Steam Launch Options (recommended for Steam games)**
 
-- **In-app Launch button** (Dashboard tab) — good for testing
-- **Steam Launch Options** — paste the generated command (`%command%` wrapper) so Steam handles it automatically every time
-- **Desktop shortcut** — generated from the Games tab for non-Steam games
+Click **Copy Steam Command** in the Games tab and paste it into Steam → right-click game → Properties → Launch Options. From then on, launching from Steam automatically runs the full disable → launch → re-enable flow.
+
+**Option 2 — Desktop / Start Menu shortcut**
+
+Click **Create Desktop Shortcut** or **Add to Start Menu** in the Games tab. Double-clicking the shortcut triggers the same flow.
+
+**Option 3 — In-app Launch button**
+
+Select a profile on the Dashboard tab and click **🎮 Launch**. Good for testing.
+
+**Option 4 — Process watcher (automatic safety net)**
+
+If the process watcher is enabled (Settings tab), the app detects when a configured game launches by any means and triggers the flow automatically. There's a known race window — prefer options 1–3 for games where enumeration timing is tight.
+
+### Dashboard tab
+
+Shows the active profile's device lists at a glance, status during a flow, and an activity log. The **Restore All** button re-enables every device the app has disabled — use it if something goes wrong.
 
 ### Devices tab
 
-Live list of all detected HID devices. Click the ON/OFF button to enable or disable individual devices directly. Click an instance ID to copy it. Toggle "Show all HID" to see keyboards, mice, and other non-gamepad devices.
+Live list of all detected HID devices. Toggle individual devices on/off directly. Click an instance ID to copy it. Enable **Show all HID** to see keyboards, mice, and other non-gamepad devices.
+
+---
+
+## Forza Horizon 5 / 6 specific notes
+
+- FH5/FH6 read DirectInput calibration registry keys at startup — the Handle Watcher detects this. You can verify it using the debug panel in the Games tab.
+- MOZA wheels need **Forza Compatibility Mode** enabled in MOZA Pit House — this makes the wheel present as a Fanatec device (VID `0EB7`), which FH6 detects via its native Fanatec SDK and routes FFB correctly.
+- Put your MOZA base in **Keep Enabled**, everything else in **Disable → Re-enable**.
 
 ---
 
 ## Identifying your devices
 
-Most devices enumerate with generic names. The VID in brackets tells you who made it:
+Most devices enumerate with generic Windows names. The VID in brackets tells you the manufacturer:
 
 | Brand | VID |
 |---|---|
@@ -91,31 +114,26 @@ VID not listed? Look it up at [usb-ids.gowdy.us](https://usb-ids.gowdy.us/) and 
 
 ---
 
-## Forza Horizon 5 / 6 specific notes
-
-- FH5/FH6 route HID through `gameinputsvc.exe` — the app watches that process, not the game itself
-- MOZA wheels need **Forza Compatibility Mode** enabled in MOZA Pit House — this makes the base present as a Fanatec device (VID `0EB7`), which FH6 detects via its native Fanatec SDK
-- Put your MOZA base in **Keep Enabled**, everything else in **Disable → Re-enable**
-
----
-
 ## Troubleshooting
 
-**FFB still not working**
-Make sure you launch the game through this app (or the Steam wrapper), not directly. The devices need to be disabled *before* the game starts enumerating.
+**FFB not working after launch**
+Make sure the game launches through HID Reorder (Steam command, shortcut, or Launch button) — not directly. The devices must be disabled *before* the game starts enumerating.
 
 **A device didn't come back**
-Hit **Restore All** in the Dashboard tab — it re-enables everything the app has disabled. Also runs automatically on next app launch if the app crashed mid-session.
+Click **Restore All** on the Dashboard tab. It also runs automatically the next time the app starts if it crashed mid-session.
 
-**Device not showing up in the list**
-Hit Refresh. If it still doesn't appear, try enabling "Show all HID" — it may be enumerated under an unexpected class. vJoy and ViGEm virtual devices are supported.
+**No devices showing in the list**
+Hit Refresh. Enable **Show all HID** — the device may be enumerated under an unexpected class. vJoy and ViGEm virtual devices are supported.
+
+**Handle Watcher showing nothing**
+Use the debug panel in the Games tab (expand "Handle Watcher"). Check the poll stats line — if it shows handles being scanned, the watcher is working. Enable **All handles** to see all named handles and confirm the game process is being watched correctly.
 
 ---
 
 ## Contributing
 
 PRs welcome for:
-- VID/PID entries for brands not in `vid-names.json`
+- VID/PID entries in `vid-names.json`
 - Bug fixes or improvements
 - Community game profiles
 

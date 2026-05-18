@@ -22,8 +22,19 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
     public Profile? SelectedProfile
     {
         get => _selectedProfile;
-        set { Set(ref _selectedProfile, value); HasSelection = value is not null; }
+        set
+        {
+            Set(ref _selectedProfile, value);
+            HasSelection = value is not null;
+            OnPropertyChanged(nameof(KeepEnabled));
+            OnPropertyChanged(nameof(DisableThenRestore));
+            OnPropertyChanged(nameof(KeepDisabled));
+        }
     }
+
+    public IEnumerable<Models.DeviceRef> KeepEnabled        => _selectedProfile?.KeepEnabled        ?? [];
+    public IEnumerable<Models.DeviceRef> DisableThenRestore => _selectedProfile?.DisableThenRestore  ?? [];
+    public IEnumerable<Models.DeviceRef> KeepDisabled       => _selectedProfile?.KeepDisabled        ?? [];
 
     public string StatusText
     {

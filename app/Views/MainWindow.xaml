@@ -61,6 +61,39 @@
                         </Grid>
                     </Border>
 
+                    <!-- Device summary -->
+                    <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="90"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Column="0" Grid.Row="0" Text="Keep Enabled"
+                                   FontWeight="SemiBold" Foreground="#3CB371" Margin="0,0,4,2"/>
+                        <TextBlock Grid.Column="1" Grid.Row="0" Text="Disable → Re-enable"
+                                   FontWeight="SemiBold" Foreground="#E07040" Margin="4,0,4,2"/>
+                        <TextBlock Grid.Column="2" Grid.Row="0" Text="Keep Disabled"
+                                   FontWeight="SemiBold" Foreground="#888" Margin="4,0,0,2"/>
+
+                        <ListBox Grid.Column="0" Grid.Row="1" Margin="0,0,4,0"
+                                 ItemsSource="{Binding KeepEnabled}"
+                                 DisplayMemberPath="FriendlyName"
+                                 BorderThickness="1" BorderBrush="#CCC" FontSize="11"/>
+                        <ListBox Grid.Column="1" Grid.Row="1" Margin="4,0,4,0"
+                                 ItemsSource="{Binding DisableThenRestore}"
+                                 DisplayMemberPath="FriendlyName"
+                                 BorderThickness="1" BorderBrush="#CCC" FontSize="11"/>
+                        <ListBox Grid.Column="2" Grid.Row="1" Margin="4,0,0,0"
+                                 ItemsSource="{Binding KeepDisabled}"
+                                 DisplayMemberPath="FriendlyName"
+                                 BorderThickness="1" BorderBrush="#CCC" FontSize="11"/>
+                    </Grid>
+
                     <!-- Activity log -->
                     <TextBlock DockPanel.Dock="Top" Text="Activity log"
                                FontWeight="SemiBold" Margin="0,0,0,4"/>
@@ -198,12 +231,43 @@
             </TabItem>
 
             <!-- ── Settings ───────────────────────────────────────────────── -->
-            <TabItem Header="Settings">
-                <Grid Margin="12">
-                    <TextBlock Text="Settings — coming soon"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                               Foreground="Gray" FontSize="14"/>
-                </Grid>
+            <TabItem Header="Settings" DataContext="{Binding Settings}">
+                <StackPanel Margin="16" MaxWidth="480" HorizontalAlignment="Left">
+
+                    <TextBlock Text="General" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,10"/>
+
+                    <CheckBox Content="Start with Windows"
+                              IsChecked="{Binding StartWithWindows}"
+                              Margin="0,0,0,8"
+                              ToolTip="Adds HID Reorder to the Windows startup registry key so it launches automatically on login."/>
+
+                    <CheckBox Content="Enable process watcher"
+                              IsChecked="{Binding ProcessWatcherEnabled}"
+                              Margin="0,0,0,8"
+                              ToolTip="Polls every 500ms for configured game executables and triggers the profile flow automatically when detected. Disable if you always launch via the in-app button, Steam command, or shortcut."/>
+
+                    <Separator Margin="0,8,0,12"/>
+
+                    <TextBlock Text="New profile defaults" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,10"/>
+
+                    <DockPanel Margin="0,0,0,8">
+                        <TextBlock DockPanel.Dock="Left" Text="Default trigger mode:"
+                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <ComboBox ItemsSource="{Binding TriggerModes}"
+                                  SelectedItem="{Binding DefaultTriggerMode}"
+                                  Width="160"/>
+                    </DockPanel>
+
+                    <Separator Margin="0,8,0,12"/>
+
+                    <TextBlock Text="About" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,10"/>
+                    <TextBlock Foreground="Gray" TextWrapping="Wrap">
+                        <Run Text="HID Reorder — per-game HID device profile manager."/>
+                        <LineBreak/>
+                        <Run Text="Source: github.com/JoshRacine/hid-reorder"/>
+                    </TextBlock>
+
+                </StackPanel>
             </TabItem>
 
         </TabControl>
