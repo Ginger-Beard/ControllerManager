@@ -21,12 +21,37 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Publish WPF app
-        run: dotnet publish app/HIDReorder.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o publish
+      # Self-contained — includes .NET runtime, just works
+      - name: Publish (self-contained)
+        run: >
+          dotnet publish app/HIDReorder.csproj
+          -c Release -r win-x64 --self-contained
+          -p:PublishSingleFile=true
+          -o publish-sc
+
+      # Framework-dependent — requires .NET 10 Desktop Runtime, much smaller
+      - name: Publish (slim / framework-dependent)
+        run: >
+          dotnet publish app/HIDReorder.csproj
+          -c Release -r win-x64 --no-self-contained
+          -p:PublishSingleFile=true
+          -o publish-fd
+
+      - name: Rename slim build
+        run: Rename-Item publish-fd\HIDReorder.exe HIDReorder-slim.exe
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: publish/HIDReorder.exe
+          files: |
+            publish-sc/HIDReorder.exe
+            publish-fd/HIDReorder-slim.exe
           generate_release_notes: true
           overwrite: true
+          body: |
+            ## Downloads
+
+            | File | Description |
+            |------|-------------|
+            | `HIDReorder.exe` | ✅ Recommended — includes .NET runtime, just run it |
+            | `HIDReorder-slim.exe` | Requires [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) — much smaller |

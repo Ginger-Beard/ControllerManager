@@ -14,6 +14,7 @@ public partial class App : Application
     public static SettingsStore SettingsStore { get; private set; } = null!;
     public static AppSettings   Settings     { get; private set; } = null!;
     public static IpcServer?    Ipc          { get; private set; }
+    public static TrayService?  Tray         { get; private set; }
 
     private Mutex? _mutex;
 
@@ -67,7 +68,16 @@ public partial class App : Application
             if (args.Length > 0 && HandleCliArgs(args))
                 return; // headless mode (--restore-all)
 
-            new Views.MainWindow().Show();
+            var window = new Views.MainWindow();
+
+            // Tray icon — attach before showing so minimize-on-start works
+            var orchestrator = new Services.LaunchOrchestrator(State);
+            Tray = new Services.TrayService(window, ProfileStore, orchestrator);
+
+            if (Settings.StartMinimized)
+                Tray.HideToTray(); // start hidden in tray
+            else
+                window.Show();
         }
         catch (Exception ex)
         {
@@ -107,6 +117,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        Tray?.Dispose();
         Ipc?.Dispose();
         State?.RestoreAll();
         _mutex?.ReleaseMutex();

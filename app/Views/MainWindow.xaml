@@ -241,6 +241,11 @@
                               Margin="0,0,0,8"
                               ToolTip="Adds HID Reorder to the Windows startup registry key so it launches automatically on login."/>
 
+                    <CheckBox Content="Start minimized to tray"
+                              IsChecked="{Binding StartMinimized}"
+                              Margin="0,0,0,8"
+                              ToolTip="Launch silently in the system tray. Double-click the tray icon to open the window."/>
+
                     <CheckBox Content="Enable process watcher"
                               IsChecked="{Binding ProcessWatcherEnabled}"
                               Margin="0,0,0,8"

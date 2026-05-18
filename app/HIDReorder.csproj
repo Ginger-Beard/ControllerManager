@@ -10,18 +10,20 @@
     <AssemblyName>HIDReorder</AssemblyName>
     <Platforms>x64</Platforms>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
-    <Using Include="System.IO"/>
+    <Using Include="System.IO" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="H.NotifyIcon.Wpf" Version="2.4.1" />
     <PackageReference Include="System.Management" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="..\vid-names.json" Link="vid-names.json"/>
+    <EmbeddedResource Include="..\vid-names.json" Link="vid-names.json" />
   </ItemGroup>
 </Project>

@@ -18,8 +18,9 @@ public static class ShortcutExporter
         shortcut.WorkingDirectory = Path.GetDirectoryName(appExe) ?? "";
         shortcut.Description      = "Launch game via HID Reorder";
 
-        if (File.Exists(gameExePath))
-            shortcut.IconLocation = $"{gameExePath},0";
+        // Prefer the game's own icon; fall back to the app exe icon
+        var iconSource = File.Exists(gameExePath) ? gameExePath : appExe;
+        shortcut.IconLocation = $"{iconSource},0";
 
         shortcut.Save();
     }

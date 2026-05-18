@@ -9,14 +9,21 @@ public sealed class SettingsViewModel : ViewModelBase
     private readonly SettingsStore _store;
     private AppSettings _settings;
 
-    private bool   _startWithWindows;
-    private bool   _processWatcherEnabled;
+    private bool        _startWithWindows;
+    private bool        _startMinimized;
+    private bool        _processWatcherEnabled;
     private TriggerMode _defaultTriggerMode;
 
     public bool StartWithWindows
     {
         get => _startWithWindows;
         set { Set(ref _startWithWindows, value); Save(); }
+    }
+
+    public bool StartMinimized
+    {
+        get => _startMinimized;
+        set { Set(ref _startMinimized, value); Save(); }
     }
 
     public bool ProcessWatcherEnabled
@@ -39,16 +46,18 @@ public sealed class SettingsViewModel : ViewModelBase
         _store    = store;
         _settings = store.Load();
 
-        _startWithWindows     = SettingsStore.GetStartWithWindows();
+        _startWithWindows      = SettingsStore.GetStartWithWindows();
+        _startMinimized        = _settings.StartMinimized;
         _processWatcherEnabled = _settings.ProcessWatcherEnabled;
-        _defaultTriggerMode   = _settings.DefaultTriggerMode;
+        _defaultTriggerMode    = _settings.DefaultTriggerMode;
     }
 
     private void Save()
     {
-        _settings.StartWithWindows     = _startWithWindows;
+        _settings.StartWithWindows      = _startWithWindows;
+        _settings.StartMinimized        = _startMinimized;
         _settings.ProcessWatcherEnabled = _processWatcherEnabled;
-        _settings.DefaultTriggerMode   = _defaultTriggerMode;
+        _settings.DefaultTriggerMode    = _defaultTriggerMode;
         _store.Save(_settings);
     }
 }
