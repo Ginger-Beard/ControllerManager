@@ -54,9 +54,6 @@ HandleWatcher detects this by watching the game process for `\REGISTRY\...\Direc
 
 ## Backlog
 
-### Games tab — device picker filtering ✅
-- Implemented. "Show All HID" checkbox above the device picker in the Games tab.
-
 ### UAC / Steam integration
 - Steam command triggers a UAC prompt on every launch because HIDReorder.exe has
   `requireAdministrator` in its manifest. If HIDReorder is already running in the tray,
@@ -93,28 +90,18 @@ to re-enable on game exit. Works the same way for Apollo (same web UI structure 
 Sunshine fork).
 
 ### Profile device ID healing ✅
-- Implemented in `ProfileHealer.Heal()`. On profile load, stale instance IDs are matched
-  by VID+PID (FriendlyName as tiebreaker). Healed IDs are persisted and a notice is shown
-  below the profile list. Logs each correction to the app log file.
+- Needs testing
 
 ### Icon
 - Current icon is placeholder. Need a real icon — suggest something with a
   joystick/controller and a reorder/sort visual. Can use Figma or commission.
   Replace `app/app.ico` (must be .ico format, ideally multi-size: 16/32/48/256px).
 
-### Licensing ✅
-- MIT `LICENSE` file added to repo root.
-
 ### Code signing
 - Apply to SignPath.io (free for OSS) — legitimate Authenticode signature, integrates with
   GitHub Actions. Takes a few days to approve. See signpath.io/product/open-source
 - Alternative: Microsoft Trusted Signing (Azure, ~$10/mo, faster approval)
 - Until signed: Windows SmartScreen will warn on first run for most users
-
-### Export / import profiles ✅
-- Implemented. Export/Import buttons in the profile list panel. Export writes the selected
-  profile to a JSON file; Import reads a JSON file and adds it as a new profile. Both use
-  native file dialogs.
 
 ### Features
 - UAC-free launch via Scheduled Task (no prompt when triggering from Steam/shortcut)
@@ -161,7 +148,8 @@ Sunshine fork).
   - Something around sim rig management (narrower audience but honest)
   - Something that implies "hide devices from games"
 - Rename is a meaningful effort: repo, binary name, mutex, IPC pipe name, AppData
-  folder, registry/task scheduler entry, all XAML namespaces, README, releases
+  folder, registry/task scheduler entry, all XAML namespaces, README, releas3
+- thinking "Controller Manager" as a play on device manager, because that is ultimately the full intent, not just for simracing devices 
 
 ### Device input monitor ✅ (implemented — needs testing)
 - Live axis/button expander at the bottom of the Devices tab, polls only while open
@@ -179,6 +167,7 @@ Sunshine fork).
     root, so `GetDedupeKey()` will fall back to instance ID normalization
 - Display: progress bars for axes, colored squares for buttons; center-zero drift
   visualization and X/Y scatter plot are still backlog
+- need to add: joystick visuals, controller triggers aren't showing up right
 
 ### Companion software handle conflict
 - When a device's companion app (MOZA Pit House, Razer Synapse, Logitech GHub, etc.) holds
