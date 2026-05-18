@@ -183,18 +183,21 @@ Sunshine fork).
 
 ### Companion software handle conflict
 - When a device's companion app (MOZA Pit House, Razer Synapse, Logitech GHub, etc.) holds
-  an open handle to the HID device, Windows returns ERROR_NOT_SUPPORTED (exit 50) and refuses
-  to disable it. This is not a driver restriction — it's Windows enforcing that you can't
-  disable a device with active handles.
-- Fix options:
-  1. **Per-device process kill list** — profile or device setting listing process names to
-     kill before disabling (e.g. "MozaPitHouse.exe"). Restart them after re-enabling.
-  2. **Auto-detect by handle** — use NtQuerySystemInformation or handle enumeration to find
-     which processes have handles to the device's HID path, then offer to close them.
-  3. **Per-device service stop** — same as above but for Windows services rather than processes.
-- Option 1 is the most practical to implement. The profile editor would have a "stop before
-  launch / restart on exit" process list, similar to how some launchers handle anti-cheat.
-- This applies generically to any device whose software keeps a handle open — not just MOZA.
+  an open handle to the HID device, Windows returns ERROR_NOT_SUPPORTED and refuses to
+  disable it. Some drivers (MOZA Windows Driver) also have a buggy disable path that
+  partially executes before returning an error, leaving the device in a disabled state.
+- Current behaviour: disable fails cleanly with an error shown in the status bar. The
+  composite USB root is never touched (fixed), so no collateral damage to other devices.
+- **Planned fix: dynamic handle detection**
+  - When disable returns ERROR_NOT_SUPPORTED, call NtQuerySystemInformation(SystemHandleInformation)
+    to enumerate all open handles system-wide and match against the device's interface path
+    (already stored in DeviceInterfacePath). This is the same technique Process Explorer uses
+    to show "which process has this file locked" — fully dynamic, zero per-device mapping.
+  - Show a prompt: "MOZA Pit House is holding this device open. Close it to disable?"
+  - User confirms → kill/suspend that process → retry disable → optionally restart the process.
+  - We already have NtQueryInformationProcess infrastructure in HandleWatcher; extend it to
+    NtQuerySystemInformation for system-wide handle enumeration.
+  - Applies generically to any device with any companion software, no maintenance required.
 
 ### Code quality
 - Code scan / review pass — check for dead code, obvious issues, security concerns
