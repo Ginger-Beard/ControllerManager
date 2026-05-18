@@ -71,6 +71,7 @@ public sealed class LaunchOrchestrator : IDisposable
 
     private async Task RunFlow(Profile profile, CancellationToken ct)
     {
+        Logger.Write($"[Orchestrator] RunFlow started — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.TriggerMode}");
         try
         {
             DisableDevices(profile, ct);
@@ -98,6 +99,7 @@ public sealed class LaunchOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
+            Logger.WriteException("Orchestrator.RunFlow", ex);
             Log($"Error: {ex.Message}");
         }
         finally
@@ -141,27 +143,27 @@ public sealed class LaunchOrchestrator : IDisposable
 
         Process.Start(new ProcessStartInfo
         {
-            FileName       = profile.GameExecutablePath,
+            FileName        = profile.GameExecutablePath,
             UseShellExecute = true,
         });
 
-        Log($"Waiting for {profile.GameExecutableName}.exe...");
+        var procName = ProcessName(profile.GameExecutableName);
+        Log($"Waiting for {procName}.exe...");
 
         var deadline = DateTime.UtcNow.AddSeconds(60);
         while (DateTime.UtcNow < deadline)
         {
             ct.ThrowIfCancellationRequested();
-            var procs = Process.GetProcessesByName(
-                profile.GameExecutableName.Replace(".exe", "", StringComparison.OrdinalIgnoreCase));
+            var procs = Process.GetProcessesByName(procName);
             if (procs.Length > 0)
             {
-                Log($"Found {profile.GameExecutableName}.exe (PID {procs[0].Id})");
+                Log($"Found {procName}.exe (PID {procs[0].Id})");
                 return procs[0];
             }
             await Task.Delay(500, ct);
         }
 
-        throw new TimeoutException($"'{profile.GameExecutableName}' did not start within 60 seconds.");
+        throw new TimeoutException($"'{procName}.exe' did not start within 60 seconds.");
     }
 
     // ── Phase 3: wait for FFB/acquisition ────────────────────────────────────────
@@ -184,7 +186,7 @@ public sealed class LaunchOrchestrator : IDisposable
         if (ev is not null)
             Log($"Acquisition signal: {ev.DevicePath}");
         else
-            Log("Acquisition timeout — proceeding anyway.");
+            LogVerbose("Acquisition timeout — proceeding anyway.");
     }
 
     // ── Phase 4: restore devices one by one ──────────────────────────────────────
@@ -217,9 +219,10 @@ public sealed class LaunchOrchestrator : IDisposable
                 if (vid is not null)
                 {
                     var ev = await WaitForDeviceEvent(vid, pid!, profile.HandleWatcherStepTimeoutMs, ct);
-                    Log(ev is not null
-                        ? $"    Game acknowledged {dev.FriendlyName}"
-                        : $"    Timeout — advancing to next device");
+                    if (ev is not null)
+                        LogVerbose($"    Game acknowledged {dev.FriendlyName}");
+                    else
+                        LogVerbose($"    Timeout — advancing to next device");
                 }
                 else
                 {
@@ -236,7 +239,8 @@ public sealed class LaunchOrchestrator : IDisposable
     private async Task MonitorUntilExit(Profile profile, Process gameProc, CancellationToken ct)
     {
         State = OrchestratorState.Monitoring;
-        Log($"Monitoring {profile.GameExecutableName}.exe — will restore Keep-Disabled devices on exit.");
+        var procName = ProcessName(profile.GameExecutableName);
+        Log($"Monitoring {procName}.exe — will restore Keep-Disabled devices on exit.");
 
         while (!gameProc.HasExited)
         {
@@ -244,7 +248,7 @@ public sealed class LaunchOrchestrator : IDisposable
             await Task.Delay(1000, ct);
         }
 
-        Log($"{profile.GameExecutableName}.exe exited.");
+        Log($"{procName}.exe exited.");
 
         if (profile.KeepDisabled.Count > 0)
         {
@@ -315,6 +319,9 @@ public sealed class LaunchOrchestrator : IDisposable
         return tcs.Task;
     }
 
+    private static string ProcessName(string executableName) =>
+        executableName.Replace(".exe", "", StringComparison.OrdinalIgnoreCase);
+
     private static (string? vid, string? pid) ParseVidPid(string instanceId)
     {
         var m = VidPidRx.Match(instanceId);
@@ -322,6 +329,17 @@ public sealed class LaunchOrchestrator : IDisposable
         return (m.Groups[1].Value.ToUpperInvariant(), m.Groups[2].Value.ToUpperInvariant());
     }
 
-    private void Log(string message) =>
-        ActivityLogged?.Invoke(this, $"{DateTime.Now:HH:mm:ss}  {message}");
+    private void Log(string message)
+    {
+        var line = $"{DateTime.Now:HH:mm:ss}  {message}";
+        ActivityLogged?.Invoke(this, line);
+    }
+
+    private void LogVerbose(string message)
+    {
+        var line = $"{DateTime.Now:HH:mm:ss}  {message}";
+        Logger.Write(line);
+        if (Logger.CurrentLevel >= LogLevel.Verbose)
+            ActivityLogged?.Invoke(this, line);
+    }
 }

@@ -15,10 +15,16 @@ public sealed class MainViewModel : ViewModelBase
         var orchestrator  = new LaunchOrchestrator(App.State);
         var processWatcher = new ProcessWatcher(App.ProfileStore, orchestrator);
 
-        Devices  = new DevicesViewModel(new DeviceEnumerator(resolver));
-        Games    = new GamesViewModel(App.ProfileStore, Devices);
+        Devices   = new DevicesViewModel(new DeviceEnumerator(resolver));
+        Games     = new GamesViewModel(App.ProfileStore, Devices);
         Dashboard = new DashboardViewModel(orchestrator, App.ProfileStore);
         Settings  = new SettingsViewModel(App.SettingsStore);
+
+        Dashboard.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(DashboardViewModel.IsRunning) && !Dashboard.IsRunning)
+                Devices.Refresh();
+        };
 
         if (App.Settings.ProcessWatcherEnabled)
             processWatcher.Start();

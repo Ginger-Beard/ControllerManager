@@ -24,6 +24,7 @@ public partial class App : Application
 
         DispatcherUnhandledException += (_, ex) =>
         {
+            Logger.WriteException("UI thread", ex.Exception);
             MessageBox.Show(ex.Exception.ToString(), "HID Reorder — Unhandled Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             ex.Handled = true;
@@ -31,15 +32,34 @@ public partial class App : Application
         };
 
         AppDomain.CurrentDomain.UnhandledException += (_, ex) =>
-            MessageBox.Show(ex.ExceptionObject.ToString(), "HID Reorder — Fatal Error",
+        {
+            var domainEx = ex.ExceptionObject as Exception ?? new Exception(ex.ExceptionObject?.ToString() ?? "unknown");
+            Logger.WriteException("AppDomain (fatal=" + ex.IsTerminating + ")", domainEx);
+            MessageBox.Show(ex.ExceptionObject?.ToString() ?? "Unknown error", "HID Reorder — Fatal Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, ex) =>
+        {
+            Logger.WriteException("UnobservedTask", ex.Exception);
+            ex.SetObserved();
+        };
 
         try
         {
             var args = e.Args;
 
             // ── Single-instance check ────────────────────────────────────────
-            _mutex = new Mutex(true, MutexName, out bool isFirst);
+            bool isFirst;
+            try
+            {
+                _mutex = new Mutex(true, MutexName, out isFirst);
+            }
+            catch (AbandonedMutexException)
+            {
+                // Previous instance crashed without releasing — we now own it
+                isFirst = true;
+            }
 
             if (!isFirst)
             {
@@ -55,10 +75,13 @@ public partial class App : Application
                 "HIDReorder");
             Directory.CreateDirectory(appData);
 
-            State        = new StateStore(Path.Combine(appData, "state.json"));
-            ProfileStore = new ProfileStore(Path.Combine(appData, "profiles.json"));
+            Logger.Initialize(appData);
+
+            State         = new StateStore(Path.Combine(appData, "state.json"));
+            ProfileStore  = new ProfileStore(Path.Combine(appData, "profiles.json"));
             SettingsStore = new SettingsStore(Path.Combine(appData, "settings.json"));
-            Settings     = SettingsStore.Load();
+            Settings      = SettingsStore.Load();
+            Logger.SetLevel(Settings.LogLevel);
             State.RecoverOnStartup();
 
             // ── IPC server ───────────────────────────────────────────────────
@@ -72,6 +95,7 @@ public partial class App : Application
 
             // Tray icon — attach before showing so minimize-on-start works
             var orchestrator = new Services.LaunchOrchestrator(State);
+            orchestrator.ActivityLogged += (_, msg) => Logger.Write(msg);
             Tray = new Services.TrayService(window, ProfileStore, orchestrator);
 
             if (Settings.StartMinimized)
@@ -120,7 +144,7 @@ public partial class App : Application
         Tray?.Dispose();
         Ipc?.Dispose();
         State?.RestoreAll();
-        _mutex?.ReleaseMutex();
+        try { _mutex?.ReleaseMutex(); } catch { }
         _mutex?.Dispose();
         base.OnExit(e);
     }

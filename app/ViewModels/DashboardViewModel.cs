@@ -54,9 +54,10 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
         private set => Set(ref _hasSelection, value);
     }
 
-    public ICommand LaunchCommand     { get; }
-    public ICommand AbortCommand      { get; }
-    public ICommand RestoreAllCommand { get; }
+    public ICommand LaunchCommand      { get; }
+    public ICommand AbortCommand       { get; }
+    public ICommand RestoreAllCommand  { get; }
+    public ICommand CopyLogCommand     { get; }
 
     public DashboardViewModel(LaunchOrchestrator orchestrator, ProfileStore profileStore)
     {
@@ -77,6 +78,15 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
                 App.State.RestoreAll();
                 AddLog("Restore All — all tracked devices re-enabled.");
             });
+
+        CopyLogCommand = new RelayCommand(
+            _ =>
+            {
+                if (ActivityLog.Count > 0)
+                    System.Windows.Clipboard.SetText(
+                        string.Join(Environment.NewLine, ActivityLog));
+            },
+            _ => ActivityLog.Count > 0);
 
         _orchestrator.StateChanged    += OnStateChanged;
         _orchestrator.ActivityLogged  += OnActivityLogged;
@@ -125,8 +135,8 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
 
     private void AddLog(string message)
     {
-        ActivityLog.Insert(0, message);
-        if (ActivityLog.Count > 100) ActivityLog.RemoveAt(ActivityLog.Count - 1);
+        ActivityLog.Add(message);
+        if (ActivityLog.Count > 200) ActivityLog.RemoveAt(0);
     }
 
     public void Dispose() => _orchestrator.Dispose();

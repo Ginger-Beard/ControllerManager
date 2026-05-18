@@ -5,7 +5,8 @@
         xmlns:local="clr-namespace:HIDReorder.Views"
         Title="HID Reorder" Height="620" Width="860"
         MinHeight="480" MinWidth="640"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        Topmost="{Binding Settings.AlwaysOnTop}">
     <Window.DataContext>
         <vm:MainViewModel/>
     </Window.DataContext>
@@ -95,9 +96,15 @@
                     </Grid>
 
                     <!-- Activity log -->
-                    <TextBlock DockPanel.Dock="Top" Text="Activity log"
-                               FontWeight="SemiBold" Margin="0,0,0,4"/>
-                    <ListBox ItemsSource="{Binding ActivityLog}"
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                        <Button DockPanel.Dock="Right" Content="Copy All"
+                                Command="{Binding CopyLogCommand}"
+                                Padding="8,2"/>
+                        <TextBlock Text="Activity log" FontWeight="SemiBold"
+                                   VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <ListBox x:Name="ActivityLogList"
+                             ItemsSource="{Binding ActivityLog}"
                              FontFamily="Consolas" FontSize="11"
                              BorderThickness="1" BorderBrush="#CCC"
                              ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
@@ -135,6 +142,31 @@
                               SelectedItem="{Binding SelectedDevice}"
                               BorderThickness="1"
                               BorderBrush="#CCCCCC">
+
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <EventSetter Event="PreviewMouseRightButtonDown"
+                                             Handler="OnDeviceItemRightClick"/>
+                            </Style>
+                        </ListView.ItemContainerStyle>
+
+                        <ListView.ContextMenu>
+                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext,
+                                                       RelativeSource={RelativeSource Self}}">
+                                <MenuItem Header="Copy name"
+                                          Command="{Binding CopyFriendlyNameCommand}"
+                                          CommandParameter="{Binding SelectedDevice}"/>
+                                <MenuItem Header="Copy VID:PID"
+                                          Command="{Binding CopyVidPidCommand}"
+                                          CommandParameter="{Binding SelectedDevice}"/>
+                                <MenuItem Header="Copy instance ID"
+                                          Command="{Binding CopyInstanceIdCommand}"
+                                          CommandParameter="{Binding SelectedDevice}"/>
+                                <MenuItem Header="Copy interface path"
+                                          Command="{Binding CopyInterfacePathCommand}"
+                                          CommandParameter="{Binding SelectedDevice}"/>
+                            </ContextMenu>
+                        </ListView.ContextMenu>
                         <ListView.View>
                             <GridView>
 
@@ -236,6 +268,11 @@
 
                     <TextBlock Text="General" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,10"/>
 
+                    <CheckBox Content="Pin window to top"
+                              IsChecked="{Binding AlwaysOnTop}"
+                              Margin="0,0,0,8"
+                              ToolTip="Keep this window above all others — useful on single monitors when watching the activity log while a game launches."/>
+
                     <CheckBox Content="Start with Windows"
                               IsChecked="{Binding StartWithWindows}"
                               Margin="0,0,0,8"
@@ -253,14 +290,26 @@
 
                     <Separator Margin="0,8,0,12"/>
 
-                    <TextBlock Text="New profile defaults" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,10"/>
+                    <TextBlock Text="Logging" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,10"/>
 
                     <DockPanel Margin="0,0,0,8">
-                        <TextBlock DockPanel.Dock="Left" Text="Default trigger mode:"
+                        <TextBlock DockPanel.Dock="Left" Text="Log level:"
                                    VerticalAlignment="Center" Margin="0,0,10,0"/>
-                        <ComboBox ItemsSource="{Binding TriggerModes}"
-                                  SelectedItem="{Binding DefaultTriggerMode}"
-                                  Width="160"/>
+                        <ComboBox ItemsSource="{Binding LogLevels}"
+                                  SelectedItem="{Binding LogLevel}"
+                                  Width="120"/>
+                    </DockPanel>
+
+                    <DockPanel Margin="0,0,0,4"
+                               ToolTip="Log file location — Off means no file is written">
+                        <Button DockPanel.Dock="Right" Content="Open folder"
+                                Command="{Binding OpenLogFolderCommand}"
+                                Padding="8,2" Margin="8,0,0,0"/>
+                        <TextBlock Text="{Binding LogFilePath}"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="Gray"
+                                   FontFamily="Consolas" FontSize="11"/>
                     </DockPanel>
 
                     <Separator Margin="0,8,0,12"/>

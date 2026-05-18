@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows.Input;
 using HIDReorder.Models;
 using HIDReorder.Services;
@@ -12,7 +13,8 @@ public sealed class SettingsViewModel : ViewModelBase
     private bool        _startWithWindows;
     private bool        _startMinimized;
     private bool        _processWatcherEnabled;
-    private TriggerMode _defaultTriggerMode;
+    private LogLevel    _logLevel;
+    private bool        _alwaysOnTop;
 
     public bool StartWithWindows
     {
@@ -32,14 +34,23 @@ public sealed class SettingsViewModel : ViewModelBase
         set { Set(ref _processWatcherEnabled, value); Save(); }
     }
 
-    public TriggerMode DefaultTriggerMode
+    public LogLevel LogLevel
     {
-        get => _defaultTriggerMode;
-        set { Set(ref _defaultTriggerMode, value); Save(); }
+        get => _logLevel;
+        set { Set(ref _logLevel, value); Logger.SetLevel(value); Save(); }
     }
 
-    public IEnumerable<TriggerMode> TriggerModes { get; } =
-        Enum.GetValues<TriggerMode>();
+    public bool AlwaysOnTop
+    {
+        get => _alwaysOnTop;
+        set { Set(ref _alwaysOnTop, value); Save(); }
+    }
+
+    public IEnumerable<LogLevel> LogLevels { get; } = Enum.GetValues<LogLevel>();
+
+    public string LogFilePath => Logger.LogFilePath ?? "(logging not initialized)";
+
+    public ICommand OpenLogFolderCommand { get; }
 
     public SettingsViewModel(SettingsStore store)
     {
@@ -49,7 +60,17 @@ public sealed class SettingsViewModel : ViewModelBase
         _startWithWindows      = SettingsStore.GetStartWithWindows();
         _startMinimized        = _settings.StartMinimized;
         _processWatcherEnabled = _settings.ProcessWatcherEnabled;
-        _defaultTriggerMode    = _settings.DefaultTriggerMode;
+        _logLevel              = _settings.LogLevel;
+        _alwaysOnTop           = _settings.AlwaysOnTop;
+
+        OpenLogFolderCommand = new RelayCommand(_ =>
+        {
+            var path = Logger.LogFilePath;
+            if (path is null) return;
+            var folder = Path.GetDirectoryName(path);
+            if (folder is not null)
+                Process.Start(new ProcessStartInfo("explorer.exe", $"\"{folder}\"") { UseShellExecute = true });
+        });
     }
 
     private void Save()
@@ -57,7 +78,8 @@ public sealed class SettingsViewModel : ViewModelBase
         _settings.StartWithWindows      = _startWithWindows;
         _settings.StartMinimized        = _startMinimized;
         _settings.ProcessWatcherEnabled = _processWatcherEnabled;
-        _settings.DefaultTriggerMode    = _defaultTriggerMode;
+        _settings.LogLevel              = _logLevel;
+        _settings.AlwaysOnTop           = _alwaysOnTop;
         _store.Save(_settings);
     }
 }

@@ -46,9 +46,11 @@ public sealed class DevicesViewModel : ViewModelBase
         set => Set(ref _selectedDevice, value);
     }
 
-    public ICommand RefreshCommand       { get; }
-    public ICommand ToggleEnabledCommand { get; }
-    public ICommand CopyInstanceIdCommand { get; }
+    public ICommand RefreshCommand           { get; }
+    public ICommand ToggleEnabledCommand     { get; }
+    public ICommand CopyFriendlyNameCommand  { get; }
+    public ICommand CopyVidPidCommand        { get; }
+    public ICommand CopyInstanceIdCommand    { get; }
     public ICommand CopyInterfacePathCommand { get; }
 
     public DevicesViewModel(DeviceEnumerator enumerator)
@@ -59,7 +61,11 @@ public sealed class DevicesViewModel : ViewModelBase
         ToggleEnabledCommand = new RelayCommand(
             p => ToggleEnabled(p as HidDevice ?? SelectedDevice),
             p => (p as HidDevice ?? SelectedDevice) is not null && !IsRefreshing);
-        CopyInstanceIdCommand = new RelayCommand(
+        CopyFriendlyNameCommand  = new RelayCommand(
+            p => CopyToClipboard((p as HidDevice ?? SelectedDevice)?.FriendlyName));
+        CopyVidPidCommand        = new RelayCommand(
+            p => CopyToClipboard((p as HidDevice ?? SelectedDevice)?.VidPid));
+        CopyInstanceIdCommand    = new RelayCommand(
             p => CopyToClipboard((p as HidDevice ?? SelectedDevice)?.InstanceId));
         CopyInterfacePathCommand = new RelayCommand(
             p => CopyToClipboard((p as HidDevice ?? SelectedDevice)?.DeviceInterfacePath));

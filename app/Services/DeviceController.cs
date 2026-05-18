@@ -14,6 +14,8 @@ public static class DeviceController
         var script = $"$ErrorActionPreference = 'Stop'\n" +
                      $"{action} -InstanceId '{Escape(instanceId)}' -Confirm:$false";
 
+        Logger.WriteVerbose($"[DeviceController] {action} → {instanceId}");
+
         var tmp = Path.ChangeExtension(Path.GetTempFileName(), ".ps1");
         File.WriteAllText(tmp, script);
         try
@@ -24,15 +26,36 @@ public static class DeviceController
                 Arguments              = $"-ExecutionPolicy Bypass -NonInteractive -WindowStyle Hidden -File \"{tmp}\"",
                 UseShellExecute        = false,
                 CreateNoWindow         = true,
+                RedirectStandardOutput = true,
                 RedirectStandardError  = true,
             })!;
-            p.WaitForExit();
+
+            // Read async to avoid deadlock if buffers fill up
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
+            var exited     = p.WaitForExit(30_000);
+
+            var stdout = stdoutTask.Result.Trim();
+            var stderr = stderrTask.Result.Trim();
+
+            if (!string.IsNullOrEmpty(stdout))
+                Logger.WriteVerbose($"[DeviceController] stdout: {stdout}");
+            if (!string.IsNullOrEmpty(stderr))
+                Logger.WriteVerbose($"[DeviceController] stderr: {stderr}");
+
+            if (!exited)
+            {
+                try { p.Kill(); } catch { }
+                Logger.Write("[DeviceController] PowerShell timed out after 30s — process killed");
+                throw new TimeoutException("PowerShell did not complete within 30 seconds.");
+            }
+
+            Logger.WriteVerbose($"[DeviceController] exit code: {p.ExitCode}");
 
             if (p.ExitCode != 0)
             {
-                var err = p.StandardError.ReadToEnd().Trim();
-                throw new InvalidOperationException(
-                    string.IsNullOrEmpty(err) ? $"PowerShell exited {p.ExitCode}" : err);
+                var msg = !string.IsNullOrEmpty(stderr) ? stderr : $"PowerShell exited {p.ExitCode}";
+                throw new InvalidOperationException(msg);
             }
         }
         finally { File.Delete(tmp); }

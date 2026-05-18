@@ -55,4 +55,4 @@ public class DeviceRef
     public string FriendlyName { get; set; } = "";
 }
 
-public enum TriggerMode { HandleWatcher, Hotkey, Timer }
+public enum TriggerMode { HandleWatcher, Timer }

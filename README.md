@@ -85,9 +85,12 @@ Live list of all detected HID devices. Toggle individual devices on/off directly
 
 ## Forza Horizon 5 / 6 specific notes
 
-- FH5/FH6 read DirectInput calibration registry keys at startup — the Handle Watcher detects this. You can verify it using the debug panel in the Games tab.
+- FH5/FH6 read DirectInput calibration registry keys at startup — the Handle Watcher detects this as the acquisition signal. You can verify it using the debug panel in the Games tab.
 - MOZA wheels need **Forza Compatibility Mode** enabled in MOZA Pit House — this makes the wheel present as a Fanatec device (VID `0EB7`), which FH6 detects via its native Fanatec SDK and routes FFB correctly.
 - Put your MOZA base in **Keep Enabled**, everything else in **Disable → Re-enable**.
+
+**Use Timer mode, not Handle Watcher, for the re-enable sequence.**
+FH6 initializes its controller stack once at startup and does not re-scan when devices are re-enabled mid-session. Handle Watcher will successfully detect the acquisition signal (FH6 writing its DirectInput registry keys), but all per-device re-enable steps will time out because the game never opens new handles to the re-enabled devices. Set the trigger to **Timer** and `TimerSeconds` to roughly how long FH6 takes to reach the main menu — 20–30 seconds is a reasonable starting point. The devices will be re-enabled in sequence after that delay regardless of whether the game acknowledges each one.
 
 ---
 
@@ -127,6 +130,9 @@ Hit Refresh. Enable **Show all HID** — the device may be enumerated under an u
 
 **Handle Watcher showing nothing**
 Use the debug panel in the Games tab (expand "Handle Watcher"). Check the poll stats line — if it shows handles being scanned, the watcher is working. Enable **All handles** to see all named handles and confirm the game process is being watched correctly.
+
+**Handle Watcher times out on every device during re-enable**
+This is expected for games that initialize DirectInput once at startup and don't re-scan (Forza Horizon 5/6 is the main example). The watcher can detect the acquisition signal fine, but the game won't open new handles when individual devices are re-enabled mid-session. Switch the profile to **Timer** mode — see [Forza Horizon 5 / 6 specific notes](#forza-horizon-5--6-specific-notes).
 
 ---
 

@@ -47,7 +47,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
     public int TimerSeconds
     {
         get => _timerSeconds;
-        set { Set(ref _timerSeconds, value); IsDirty = true; }
+        set { Set(ref _timerSeconds, Math.Clamp(value, 5, 300)); IsDirty = true; }
     }
 
     public bool IsDirty

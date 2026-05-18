@@ -3,6 +3,8 @@ using HIDReorder.Models;
 
 namespace HIDReorder.Models;
 
+public enum LogLevel { Off, Normal, Verbose }
+
 public sealed class AppSettings
 {
     [JsonPropertyName("startWithWindows")]
@@ -14,6 +16,9 @@ public sealed class AppSettings
     [JsonPropertyName("processWatcherEnabled")]
     public bool ProcessWatcherEnabled { get; set; } = true;
 
-    [JsonPropertyName("defaultTriggerMode")]
-    public TriggerMode DefaultTriggerMode { get; set; } = TriggerMode.HandleWatcher;
+    [JsonPropertyName("logLevel")]
+    public LogLevel LogLevel { get; set; } = LogLevel.Normal;
+
+    [JsonPropertyName("alwaysOnTop")]
+    public bool AlwaysOnTop { get; set; }
 }
