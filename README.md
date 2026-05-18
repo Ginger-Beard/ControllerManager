@@ -142,9 +142,8 @@ PRs welcome for:
 ## Project layout
 
 ```
-/app             — WPF app (active development)
-/gui             — original WinForms prototype (preserved, not extended)
-/vid-names.json  — shared VID/PID vendor name map
+/app             — WPF app
+/vid-names.json  — VID/PID vendor name map
 ```
 
 ---

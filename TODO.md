@@ -76,6 +76,7 @@ HandleWatcher detects this by watching the game process for `\REGISTRY\...\Direc
 
 ## Build notes
 
-- Build from `/app` directory: `dotnet.exe build` (Windows binary, not WSL `dotnet`)
-- Publish: `dotnet.exe publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true`
-- Release: push a `vX.Y.Z` tag to trigger GitHub Actions
+- Build: `dotnet.exe build` from `/app` (Windows binary, not WSL `dotnet`)
+- Self-contained publish: `dotnet.exe publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o publish-sc`
+- Slim publish: `dotnet.exe publish -c Release -r win-x64 --no-self-contained -p:PublishSingleFile=true -o publish-fd`
+- Release: push a `vX.Y.Z` tag to trigger GitHub Actions (builds both)
