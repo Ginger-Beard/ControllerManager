@@ -5,6 +5,8 @@ namespace HIDReorder.Services;
 
 public static class DeviceController
 {
+    public static event EventHandler? DeviceStateChanged;
+
     public static void SetEnabled(HidDevice device, bool enable)
         => SetEnabledById(device.InstanceId, enable);
 
@@ -57,6 +59,8 @@ public static class DeviceController
                 var msg = !string.IsNullOrEmpty(stderr) ? stderr : $"PowerShell exited {p.ExitCode}";
                 throw new InvalidOperationException(msg);
             }
+
+            DeviceStateChanged?.Invoke(null, EventArgs.Empty);
         }
         finally { File.Delete(tmp); }
     }

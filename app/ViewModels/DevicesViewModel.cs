@@ -60,7 +60,7 @@ public sealed class DevicesViewModel : ViewModelBase
         RefreshCommand       = new RelayCommand(_ => Refresh(), _ => !IsRefreshing);
         ToggleEnabledCommand = new RelayCommand(
             p => ToggleEnabled(p as HidDevice ?? SelectedDevice),
-            p => (p as HidDevice ?? SelectedDevice) is not null && !IsRefreshing);
+            p => (p as HidDevice ?? SelectedDevice) is not null);
         CopyFriendlyNameCommand  = new RelayCommand(
             p => CopyToClipboard((p as HidDevice ?? SelectedDevice)?.FriendlyName));
         CopyVidPidCommand        = new RelayCommand(
@@ -85,8 +85,7 @@ public sealed class DevicesViewModel : ViewModelBase
                 var list = _enumerator.GetAll(_showAllHid);
                 Application.Current.Dispatcher.Invoke(() =>
                 {
-                    Devices.Clear();
-                    foreach (var d in list) Devices.Add(d);
+                    MergeDevices(list);
                     StatusText   = $"{list.Count} device(s) found.";
                     IsRefreshing = false;
                 });
@@ -100,6 +99,32 @@ public sealed class DevicesViewModel : ViewModelBase
                 });
             }
         });
+    }
+
+    private void MergeDevices(List<HidDevice> incoming)
+    {
+        // Remove devices that disappeared
+        for (int i = Devices.Count - 1; i >= 0; i--)
+        {
+            if (!incoming.Any(d => d.InstanceId == Devices[i].InstanceId))
+                Devices.RemoveAt(i);
+        }
+
+        // Update changed items and insert new ones
+        for (int i = 0; i < incoming.Count; i++)
+        {
+            var next     = incoming[i];
+            var existing = Devices.FirstOrDefault(d => d.InstanceId == next.InstanceId);
+
+            if (existing is null)
+            {
+                Devices.Insert(Math.Min(i, Devices.Count), next);
+            }
+            else
+            {
+                existing.IsEnabled = next.IsEnabled;
+            }
+        }
     }
 
     private void ToggleEnabled(HidDevice? device)

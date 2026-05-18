@@ -54,10 +54,9 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
         private set => Set(ref _hasSelection, value);
     }
 
-    public ICommand LaunchCommand      { get; }
-    public ICommand AbortCommand       { get; }
-    public ICommand RestoreAllCommand  { get; }
-    public ICommand CopyLogCommand     { get; }
+    public ICommand LaunchCommand   { get; }
+    public ICommand RestoreCommand  { get; }
+    public ICommand CopyLogCommand  { get; }
 
     public DashboardViewModel(LaunchOrchestrator orchestrator, ProfileStore profileStore)
     {
@@ -68,16 +67,8 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
             _ => Launch(),
             _ => HasSelection && !IsRunning);
 
-        AbortCommand = new RelayCommand(
-            _ => _orchestrator.Abort(),
-            _ => IsRunning);
-
-        RestoreAllCommand = new RelayCommand(
-            _ =>
-            {
-                App.State.RestoreAll();
-                AddLog("Restore All — all tracked devices re-enabled.");
-            });
+        RestoreCommand = new RelayCommand(
+            _ => _ = _orchestrator.AbortAsync());
 
         CopyLogCommand = new RelayCommand(
             _ =>

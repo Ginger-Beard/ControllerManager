@@ -51,14 +51,17 @@ public sealed class LaunchOrchestrator : IDisposable
         _flowTask = Task.Run(() => RunFlow(profile, _cts.Token));
     }
 
-    public void Abort()
+    public async Task AbortAsync()
     {
         _cts?.Cancel();
         _watcher.Stop();
-        try { _flowTask?.Wait(3000); } catch { }
+
+        if (_flowTask is not null)
+            try { await _flowTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); } catch { }
+
         _stateStore.RestoreAll();
         State = OrchestratorState.Idle;
-        Log("Aborted — all devices restored.");
+        Log("Restored — all devices re-enabled.");
     }
 
     public void Dispose()

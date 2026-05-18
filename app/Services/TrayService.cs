@@ -79,8 +79,8 @@ public sealed class TrayService : IDisposable
 
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
 
-        var restoreItem = new System.Windows.Forms.ToolStripMenuItem("Restore All Devices");
-        restoreItem.Click += (_, _) => App.State.RestoreAll();
+        var restoreItem = new System.Windows.Forms.ToolStripMenuItem("Restore");
+        restoreItem.Click += (_, _) => _ = orchestrator.AbortAsync();
         menu.Items.Add(restoreItem);
 
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());

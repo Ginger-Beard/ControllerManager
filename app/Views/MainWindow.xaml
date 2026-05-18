@@ -40,19 +40,16 @@
                                       DisplayMemberPath="Name"
                                       Margin="0,0,8,0"/>
 
-                            <!-- Launch / Abort buttons -->
+                            <!-- Launch / Restore buttons -->
                             <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
                                 <Button Content="🎮  Launch"
                                         Command="{Binding LaunchCommand}"
                                         Padding="16,6" FontSize="13"
                                         Background="#3CB371" Foreground="White"/>
-                                <Button Content="Abort"
-                                        Command="{Binding AbortCommand}"
-                                        Padding="10,6" Margin="6,0,0,0"/>
-                                <Button Content="Restore All"
-                                        Command="{Binding RestoreAllCommand}"
+                                <Button Content="Restore"
+                                        Command="{Binding RestoreCommand}"
                                         Padding="10,6" Margin="6,0,0,0"
-                                        ToolTip="Re-enable all devices this app has disabled"/>
+                                        ToolTip="Stop any running flow and re-enable all devices"/>
                             </StackPanel>
 
                             <!-- Status -->

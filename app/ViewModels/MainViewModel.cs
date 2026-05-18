@@ -9,10 +9,12 @@ public sealed class MainViewModel : ViewModelBase
     public GamesViewModel     Games     { get; }
     public SettingsViewModel  Settings  { get; }
 
+    private CancellationTokenSource? _refreshDebounce;
+
     public MainViewModel()
     {
-        var resolver      = new VidResolver();
-        var orchestrator  = new LaunchOrchestrator(App.State);
+        var resolver       = new VidResolver();
+        var orchestrator   = new LaunchOrchestrator(App.State);
         var processWatcher = new ProcessWatcher(App.ProfileStore, orchestrator);
 
         Devices   = new DevicesViewModel(new DeviceEnumerator(resolver));
@@ -20,11 +22,7 @@ public sealed class MainViewModel : ViewModelBase
         Dashboard = new DashboardViewModel(orchestrator, App.ProfileStore);
         Settings  = new SettingsViewModel(App.SettingsStore);
 
-        Dashboard.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(DashboardViewModel.IsRunning) && !Dashboard.IsRunning)
-                Devices.Refresh();
-        };
+        DeviceController.DeviceStateChanged += OnDeviceStateChanged;
 
         if (App.Settings.ProcessWatcherEnabled)
             processWatcher.Start();
@@ -43,5 +41,17 @@ public sealed class MainViewModel : ViewModelBase
                 App.State.RestoreAll();
             }
         };
+    }
+
+    private void OnDeviceStateChanged(object? sender, EventArgs e)
+    {
+        _refreshDebounce?.Cancel();
+        _refreshDebounce = new CancellationTokenSource();
+        var token = _refreshDebounce.Token;
+        Task.Delay(400, token).ContinueWith(t =>
+        {
+            if (t.IsCompletedSuccessfully)
+                System.Windows.Application.Current.Dispatcher.Invoke(Devices.Refresh);
+        });
     }
 }

@@ -52,11 +52,23 @@ public sealed class ProcessWatcher : IDisposable
 
     private void Tick()
     {
-        if (_orchestrator.IsRunning) return;
-
         var profiles = _profiles.Load()
             .Where(p => p.ProcessWatcherEnabled && !string.IsNullOrEmpty(p.GameExecutableName))
             .ToList();
+
+        if (_orchestrator.IsRunning)
+        {
+            // While a flow is running, mark any matching game PIDs as handled so
+            // they don't re-trigger when the flow stops or is aborted.
+            foreach (var profile in profiles)
+            {
+                var exeName = profile.GameExecutableName
+                    .Replace(".exe", "", StringComparison.OrdinalIgnoreCase);
+                foreach (var proc in Process.GetProcessesByName(exeName))
+                    _handledPids.Add(proc.Id);
+            }
+            return;
+        }
 
         foreach (var profile in profiles)
         {
