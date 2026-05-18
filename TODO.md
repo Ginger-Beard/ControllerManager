@@ -41,27 +41,67 @@ HandleWatcher detects this by watching the game process for `\REGISTRY\...\Direc
 5. ✅ Profile model + persistence (three device lists, TriggerMode, games tab editor)
 6. ✅ HandleWatcher (NtQueryInformationProcess, \Device\HID* + \DirectInput\ handles)
 7. ✅ LaunchOrchestrator state machine (Idle→Disable→Launch→Acquire→Restore→Monitor)
-8. ✅ Dashboard tab (profile picker, device summary lists, Launch/Abort/Restore All, activity log)
+8. ✅ Dashboard tab (profile picker, device summary lists, Launch/Restore, activity log)
 9. ✅ Steam wrapper (--steam-wrap CLI, disable→spawn game→wait→restore)
 10. ✅ Process watcher (500ms poll, auto-triggers on game launch)
 11. ✅ Shortcut export (WScript.Shell .lnk, Desktop + Start Menu buttons in Games tab)
 12. ✅ Single-instance + named pipe IPC (mutex, \\.\pipe\HIDReorder, --launch forwarding)
-13. ✅ Settings tab (Start with Windows, process watcher toggle, default trigger mode)
+13. ✅ Settings tab (Start with Windows, process watcher toggle, logging level, pin to top)
+14. ✅ System tray icon + per-profile quick-launch from tray
+15. ✅ File logging with Off/Normal/Verbose levels
 
 ---
 
-## v2 stretch goals
+## Backlog
 
-- System tray icon + per-profile quick-launch from tray
-- Hotkey fallback trigger (user presses key when they feel FFB kick in)
-- Timer fallback trigger (simpler than HandleWatcher for edge cases)
-- UAC-free shortcuts via Scheduled Task ("Run with highest privileges")
-- Profile presets — community JSON contributions for common games
+### UAC / Steam integration
+- Steam command triggers a UAC prompt on every launch because HIDReorder.exe has
+  `requireAdministrator` in its manifest. If HIDReorder is already running in the tray,
+  the second instance still needs to elevate to forward IPC, then exits — still prompts.
+  Fix: create a Scheduled Task set to "Run with highest privileges" and have the Steam
+  command trigger the task instead of the exe directly. No UAC prompt if user is already
+  an admin.
+
+### Documentation
+- Rewrite README as user-facing setup guide (not internal docs):
+  - Lead with what it does and why in plain language
+  - Step-by-step setup with screenshots
+  - Real game examples (FH5/FH6 confirmed, others clearly marked unverified)
+  - Explain the two download options: slim (needs .NET runtime) vs self-contained
+    (bigger file, runs anywhere) — most users should grab self-contained
+  - Remove any hallucinated or unverified game examples
+
+### Icon
+- Current icon is placeholder. Need a real icon — suggest something with a
+  joystick/controller and a reorder/sort visual. Can use Figma or commission.
+  Replace `app/app.ico` (must be .ico format, ideally multi-size: 16/32/48/256px).
+
+### Licensing
+- Add MIT `LICENSE` file to repo root
+
+### Code signing
+- Apply to SignPath.io (free for OSS) — legitimate Authenticode signature, integrates with
+  GitHub Actions. Takes a few days to approve. See signpath.io/product/open-source
+- Alternative: Microsoft Trusted Signing (Azure, ~$10/mo, faster approval)
+- Until signed: Windows SmartScreen will warn on first run for most users
+
+### Export / import profiles
+- Export: serialize selected profile (or all profiles) to a JSON file via Save dialog
+- Import: load a JSON file, merge or replace existing profiles
+- Useful for backup and sharing community profiles
+- Single profile export should produce a standalone JSON anyone can drop in
+- "Import all" could be a zip of multiple profile JSONs
+
+### Features
+- UAC-free launch via Scheduled Task (no prompt when triggering from Steam/shortcut)
+- Per-device delay-before-enable override (some devices need settle time)
+- Community profile presets (game-specific JSON contributions via PR)
 - HidHide CLI backend option
-- Per-device delay-before-enable override
-- Import / export profiles
-- Code signing (free option — SignPath.io for open source)
-- Minimize to tray
+
+### Code quality
+- Code scan / review pass — check for dead code, obvious issues, security concerns
+- Consider replacing PowerShell Enable/Disable-PnpDevice with direct SetupAPI calls
+  to eliminate the ~1s per-device PowerShell startup overhead
 
 ---
 
@@ -71,6 +111,8 @@ HandleWatcher detects this by watching the game process for `\REGISTRY\...\Direc
 - Steam wrapper keeps a process alive for playtime tracking; if HIDReorder crashes mid-wrap, devices may stay disabled until next launch (state.json recovery handles this)
 - Process watcher has a race window — prefer Steam wrapper or shortcut for timing-sensitive games
 - Shortcut icon extraction works for non-UWP games only (direct .exe path)
+- Steam command requires UAC prompt on each launch unless Scheduled Task workaround is used
+- App is unsigned — Windows SmartScreen will warn on first run until code signing is set up
 
 ---
 
