@@ -125,6 +125,10 @@
                                   IsChecked="{Binding ShowAllHid}"
                                   VerticalAlignment="Center"
                                   Margin="8,0,0,0"/>
+                        <Button Content="Copy All"
+                                Command="{Binding CopyAllCommand}"
+                                DockPanel.Dock="Right"
+                                Padding="12,4" Margin="4,0,0,0"/>
                         <Button Content="Refresh"
                                 Command="{Binding RefreshCommand}"
                                 DockPanel.Dock="Right"
@@ -133,6 +137,74 @@
                                    VerticalAlignment="Center"
                                    Foreground="Gray"/>
                     </DockPanel>
+
+                    <!-- Live input monitor (bottom dock — only polls while expanded) -->
+                    <Expander DockPanel.Dock="Bottom"
+                              Header="Input Monitor"
+                              IsExpanded="{Binding IsMonitorExpanded}"
+                              MaxHeight="160"
+                              Margin="0,4,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Axes -->
+                            <ItemsControl Grid.Column="0"
+                                          ItemsSource="{Binding Axes}"
+                                          Margin="4">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <DockPanel Margin="0,2">
+                                            <TextBlock Text="{Binding Name}" Width="48"
+                                                       FontSize="11" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{Binding RawText}" Width="40"
+                                                       FontSize="10" Foreground="Gray"
+                                                       VerticalAlignment="Center"
+                                                       TextAlignment="Right" Margin="2,0"/>
+                                            <ProgressBar Value="{Binding Value}"
+                                                         Minimum="0" Maximum="1" Height="10"
+                                                         DockPanel.Dock="Right"/>
+                                        </DockPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- Buttons -->
+                            <ScrollViewer Grid.Column="1"
+                                          VerticalScrollBarVisibility="Auto">
+                                <ItemsControl ItemsSource="{Binding Buttons}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Width="22" Height="22" Margin="2"
+                                                    CornerRadius="3"
+                                                    ToolTip="{Binding Label}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="#DDDDDD"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsPressed}" Value="True">
+                                                                <Setter Property="Background" Value="#3CB371"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock Text="{Binding Label}" FontSize="9"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"/>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Grid>
+                    </Expander>
 
                     <!-- Device list -->
                     <ListView ItemsSource="{Binding Devices}"
@@ -199,6 +271,17 @@
                                                        FontFamily="Consolas"
                                                        FontSize="11"
                                                        Foreground="#555"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+
+                                <!-- Input caps summary -->
+                                <GridViewColumn Header="Inputs" Width="70">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding InputSummary}"
+                                                       FontSize="10"
+                                                       Foreground="#777"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>

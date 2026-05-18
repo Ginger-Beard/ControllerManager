@@ -6,7 +6,7 @@ using HIDReorder.Services;
 
 namespace HIDReorder.ViewModels;
 
-public sealed class DevicesViewModel : ViewModelBase
+public sealed class DevicesViewModel : ViewModelBase, IDisposable
 {
     private readonly DeviceEnumerator _enumerator;
 
@@ -15,7 +15,18 @@ public sealed class DevicesViewModel : ViewModelBase
     private string _statusText = "Ready.";
     private HidDevice? _selectedDevice;
 
-    public ObservableCollection<HidDevice> Devices { get; } = [];
+    private HidInputMonitor? _monitor;
+    private bool             _isMonitorExpanded;
+
+    public ObservableCollection<HidDevice>      Devices { get; } = [];
+    public ObservableCollection<AxisViewModel>  Axes    { get; } = [];
+    public ObservableCollection<ButtonViewModel> Buttons { get; } = [];
+
+    public bool IsMonitorExpanded
+    {
+        get => _isMonitorExpanded;
+        set { if (Set(ref _isMonitorExpanded, value)) UpdateMonitor(); }
+    }
 
     public bool ShowAllHid
     {
@@ -43,11 +54,12 @@ public sealed class DevicesViewModel : ViewModelBase
     public HidDevice? SelectedDevice
     {
         get => _selectedDevice;
-        set => Set(ref _selectedDevice, value);
+        set { if (Set(ref _selectedDevice, value)) UpdateMonitor(); }
     }
 
     public ICommand RefreshCommand           { get; }
     public ICommand ToggleEnabledCommand     { get; }
+    public ICommand CopyAllCommand           { get; }
     public ICommand CopyFriendlyNameCommand  { get; }
     public ICommand CopyVidPidCommand        { get; }
     public ICommand CopyInstanceIdCommand    { get; }
@@ -57,7 +69,17 @@ public sealed class DevicesViewModel : ViewModelBase
     {
         _enumerator = enumerator;
 
-        RefreshCommand       = new RelayCommand(_ => Refresh(), _ => !IsRefreshing);
+        RefreshCommand = new RelayCommand(_ => Refresh(), _ => !IsRefreshing);
+        CopyAllCommand = new RelayCommand(_ =>
+        {
+            if (Devices.Count == 0) return;
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"HID Reorder — Device Dump  ({DateTime.Now:yyyy-MM-dd HH:mm:ss})");
+            sb.AppendLine(new string('-', 80));
+            foreach (var d in Devices)
+                sb.AppendLine($"{(d.IsEnabled ? "ON " : "OFF")}  {d.VidPid,-22}  {d.FriendlyName,-55}  {d.InstanceId}");
+            Clipboard.SetText(sb.ToString());
+        }, _ => Devices.Count > 0);
         ToggleEnabledCommand = new RelayCommand(
             p => ToggleEnabled(p as HidDevice ?? SelectedDevice),
             p => (p as HidDevice ?? SelectedDevice) is not null);
@@ -147,15 +169,17 @@ public sealed class DevicesViewModel : ViewModelBase
 
                 if (!device.IsEnabled)
                     App.State.ClearEnabled(device);
+
+                Application.Current.Dispatcher.Invoke(Refresh);
             }
             catch (Exception ex)
             {
+                // Don't refresh on failure — keep the error visible in the status bar
                 Application.Current.Dispatcher.Invoke(() =>
-                    StatusText = $"Error: {ex.Message}");
-            }
-            finally
-            {
-                Application.Current.Dispatcher.Invoke(Refresh);
+                {
+                    StatusText   = $"Error: {ex.Message}";
+                    IsRefreshing = false;
+                });
             }
         });
     }
@@ -165,4 +189,72 @@ public sealed class DevicesViewModel : ViewModelBase
         if (!string.IsNullOrEmpty(text))
             Clipboard.SetText(text);
     }
+
+    // ── Live input monitor ──────────────────────────────────────────────────────
+
+    private void UpdateMonitor()
+    {
+        // Always tear down the previous monitor first so handlers and handles
+        // from the old device are released before a new one is opened.
+        StopMonitor();
+
+        if (!_isMonitorExpanded) return;
+        if (_selectedDevice is null) return;
+
+        var path = _selectedDevice.DeviceInterfacePath;
+        if (string.IsNullOrEmpty(path)) return;
+
+        var monitor = new HidInputMonitor();
+        if (!monitor.Open(path))
+        {
+            monitor.Dispose();
+            return;
+        }
+
+        Axes.Clear();
+        Buttons.Clear();
+        foreach (var ax in monitor.Axes) Axes.Add(new AxisViewModel(ax.Name));
+        for (int i = 1; i <= monitor.TotalButtonCount; i++)
+            Buttons.Add(new ButtonViewModel(i.ToString()));
+
+        monitor.AxesUpdated += OnAxesUpdated;
+        monitor.ButtonsUpdated += OnButtonsUpdated;
+
+        _monitor = monitor;
+        _monitor.StartPolling(action =>
+            Application.Current?.Dispatcher.BeginInvoke(action));
+    }
+
+    private void OnAxesUpdated(float[] values)
+    {
+        int n = Math.Min(values.Length, Axes.Count);
+        for (int i = 0; i < n; i++)
+        {
+            Axes[i].Value   = values[i];
+            Axes[i].RawText = values[i].ToString("0.00");
+        }
+    }
+
+    private void OnButtonsUpdated(bool[] pressed)
+    {
+        int n = Math.Min(pressed.Length, Buttons.Count);
+        for (int i = 0; i < n; i++)
+            Buttons[i].IsPressed = pressed[i];
+    }
+
+    private void StopMonitor()
+    {
+        if (_monitor is not null)
+        {
+            _monitor.AxesUpdated    -= OnAxesUpdated;
+            _monitor.ButtonsUpdated -= OnButtonsUpdated;
+            _monitor.Stop();
+            _monitor.Dispose();
+            _monitor = null;
+        }
+        Axes.Clear();
+        Buttons.Clear();
+    }
+
+    public void Dispose() => StopMonitor();
 }

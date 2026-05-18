@@ -54,6 +54,13 @@ HandleWatcher detects this by watching the game process for `\REGISTRY\...\Direc
 
 ## Backlog
 
+### Games tab — device picker filtering
+- The device picker in the Games tab (when assigning devices to a profile's Keep Enabled /
+  Disable→Restore / Keep Disabled lists) should have the same "Show All HID" toggle as the
+  Devices tab — currently it shows all enumerated devices with no way to filter down to just
+  game controllers. Add a checkbox or toggle to the picker so users aren't wading through
+  keyboards, fan controllers, and audio devices when building a profile.
+
 ### UAC / Steam integration
 - Steam command triggers a UAC prompt on every launch because HIDReorder.exe has
   `requireAdministrator` in its manifest. If HIDReorder is already running in the tray,
@@ -70,6 +77,24 @@ HandleWatcher detects this by watching the game process for `\REGISTRY\...\Direc
   - Explain the two download options: slim (needs .NET runtime) vs self-contained
     (bigger file, runs anywhere) — most users should grab self-contained
   - Remove any hallucinated or unverified game examples
+  - Include Sunshine/Apollo streaming example (see below)
+
+### Sunshine / Apollo streaming example (for docs)
+Use case: when game streaming via Sunshine or Apollo, the host creates a virtual controller
+(via ViGEm) for the remote client's input. If physical controllers are also present, the
+game may assign them lower slot numbers, pushing the virtual controller off slot #1.
+Profile setup:
+  - Keep Disabled: all physical game controllers on the host
+  - Keep Enabled: the Sunshine/Apollo virtual controller (appears in Devices tab when a
+    session is active — find its VID/PID there and add it to the profile)
+  - The virtual controller is only present while a session is active, so build the profile
+    with a client connected
+Trigger setup: use Sunshine's "Command Preparations" in its web UI — put
+`"C:\path\to\HIDReorder.exe" --launch <profileId>` in the cmd (blocking) field so
+HIDReorder disables physical controllers before the game launches. On app exit, Sunshine
+has a "Detach Command" field — put the same `--launch` there or rely on process watcher
+to re-enable on game exit. Works the same way for Apollo (same web UI structure as a
+Sunshine fork).
 
 ### Icon
 - Current icon is placeholder. Need a real icon — suggest something with a
@@ -96,7 +121,80 @@ HandleWatcher detects this by watching the game process for `\REGISTRY\...\Direc
 - UAC-free launch via Scheduled Task (no prompt when triggering from Steam/shortcut)
 - Per-device delay-before-enable override (some devices need settle time)
 - Community profile presets (game-specific JSON contributions via PR)
-- HidHide CLI backend option
+- Alternative backend options for device hiding
+- **Idle/standby device profile** — a default profile that's always active when no game
+  is running. Devices listed in it stay disabled at all times unless a game profile takes
+  over, then restores them to the idle state (not necessarily all-enabled) when the game
+  exits. Use case: keep the entire sim rig invisible to Windows/other apps by default,
+  only surface devices when a sim game runs — no kernel driver or service needed,
+  just PnP toggling. Need to think through:
+  - What "idle profile" means for the three device roles (probably just a Keep Disabled list)
+  - How game profile exit interacts with idle state: currently "exit" means re-enable
+    everything, but with an idle profile it should restore to idle state instead (i.e.
+    re-disable the sim rig). These two restore paths need to be unified or the idle
+    profile will be silently overridden every time a game exits
+  - Whether idle profile activates on app start, or only after first game session ends
+
+### Direction decision (blocks rename, README rewrite, icon)
+- Is this a **gaming tool** (sim rig manager, FFB fix, tight sim-racing focus) or a
+  **system tool** (general HID/controller manager, broader audience, PnP automation)?
+- Currently the architecture is general but every feature and all docs are sim-racing-first
+- Gaming tool: narrower audience, more passionate, README leads with "FFB every time",
+  community presets, Steam integration front and center
+- System tool: broader appeal, idle profile and input monitor make more sense,
+  name leans more technical
+- The idle profile feature is the clearest signal — it's a system tool feature, not a
+  sim-racing-specific one. If that's in scope, lean system tool.
+- This decision should be made before the rename, README rewrite, and icon work
+  since all three depend heavily on which direction is chosen
+
+### Project rename consideration
+- "HID Reorder" is technically accurate (HID is the USB device class everything falls
+  under — keyboards, mice, wheels, pedals, shifters, all of it) but it reads as jargon
+  and doesn't communicate what the tool actually does to a normal user
+- The app filters to game-controller-class HIDs specifically — keyboards and mice are
+  excluded and there's essentially no reason to disable them for game compatibility.
+  No shipping PC game assumes there's no keyboard attached.
+- "Reorder" is also a bit misleading — the app doesn't reorder a list, it manipulates
+  PnP enumeration timing to influence which device Windows assigns as controller slot #1
+- Better name directions to consider:
+  - Something around controller/input priority or sequencing
+  - Something around sim rig management (narrower audience but honest)
+  - Something that implies "hide devices from games"
+- Rename is a meaningful effort: repo, binary name, mutex, IPC pipe name, AppData
+  folder, registry/task scheduler entry, all XAML namespaces, README, releases
+
+### Device input monitor ✅ (implemented — needs testing)
+- Live axis/button expander at the bottom of the Devices tab, polls only while open
+- Uses raw HID via `HidD_GetPreparsedData` / `HidP_GetValueCaps` / `ReadFile`
+- Also used to filter devices with zero HID input caps (Lian Li fans, audio devices)
+  from the default view (still visible via Show All HID)
+- **TODO: test with Bluetooth controllers** — Bluetooth HID devices have different
+  instance ID formats and device paths than USB. The `ToDevicePath()` derivation
+  (`HID#VID...#{guid}`) may or may not resolve correctly for BT devices. Specifically:
+  - BT instance IDs often start with `BTHENUM\...` or `BTHLEDevice\...`, not `HID\`
+  - The derived path might fail to open; verify `HidInputMonitor.Open()` succeeds
+  - If it fails, may need to enumerate via SetupDi by device interface GUID rather
+    than deriving the path from the instance ID
+  - Also verify dedup logic works for BT — Bluetooth HID devices have no USB composite
+    root, so `GetDedupeKey()` will fall back to instance ID normalization
+- Display: progress bars for axes, colored squares for buttons; center-zero drift
+  visualization and X/Y scatter plot are still backlog
+
+### Companion software handle conflict
+- When a device's companion app (MOZA Pit House, Razer Synapse, Logitech GHub, etc.) holds
+  an open handle to the HID device, Windows returns ERROR_NOT_SUPPORTED (exit 50) and refuses
+  to disable it. This is not a driver restriction — it's Windows enforcing that you can't
+  disable a device with active handles.
+- Fix options:
+  1. **Per-device process kill list** — profile or device setting listing process names to
+     kill before disabling (e.g. "MozaPitHouse.exe"). Restart them after re-enabling.
+  2. **Auto-detect by handle** — use NtQuerySystemInformation or handle enumeration to find
+     which processes have handles to the device's HID path, then offer to close them.
+  3. **Per-device service stop** — same as above but for Windows services rather than processes.
+- Option 1 is the most practical to implement. The profile editor would have a "stop before
+  launch / restart on exit" process list, similar to how some launchers handle anti-cheat.
+- This applies generically to any device whose software keeps a handle open — not just MOZA.
 
 ### Code quality
 - Code scan / review pass — check for dead code, obvious issues, security concerns

@@ -1,13 +1,12 @@
+using System.Diagnostics;
 using System.Text.Json;
-using Microsoft.Win32;
 using HIDReorder.Models;
 
 namespace HIDReorder.Services;
 
 public sealed class SettingsStore(string path)
 {
-    private const string RunKey    = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
-    private const string RunValue  = "HIDReorder";
+    private const string TaskName = "HIDReorder_Startup";
     private static readonly JsonSerializerOptions Opts = new() { WriteIndented = true };
 
     public AppSettings Load()
@@ -32,17 +31,19 @@ public sealed class SettingsStore(string path)
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
-            if (key is null) return;
-
             if (enable)
             {
-                var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
-                if (exe is not null) key.SetValue(RunValue, $"\"{exe}\"");
+                var exe = Process.GetCurrentProcess().MainModule?.FileName;
+                if (exe is null) return;
+
+                // Create a scheduled task that runs elevated at logon with no UAC prompt.
+                // /RL HIGHEST = "Run with highest privileges"; /IT = only when user is logged on.
+                RunSchtasks($"/Create /F /TN \"{TaskName}\" /TR \"\\\"{exe}\\\"\" " +
+                            $"/SC ONLOGON /RL HIGHEST /IT /DELAY 0000:10");
             }
             else
             {
-                key.DeleteValue(RunValue, throwOnMissingValue: false);
+                RunSchtasks($"/Delete /F /TN \"{TaskName}\"");
             }
         }
         catch { }
@@ -52,9 +53,32 @@ public sealed class SettingsStore(string path)
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-            return key?.GetValue(RunValue) is not null;
+            using var p = Process.Start(new ProcessStartInfo
+            {
+                FileName               = "schtasks.exe",
+                Arguments              = $"/Query /TN \"{TaskName}\"",
+                UseShellExecute        = false,
+                CreateNoWindow         = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+            })!;
+            p.WaitForExit(3000);
+            return p.ExitCode == 0;
         }
         catch { return false; }
+    }
+
+    private static void RunSchtasks(string args)
+    {
+        using var p = Process.Start(new ProcessStartInfo
+        {
+            FileName               = "schtasks.exe",
+            Arguments              = args,
+            UseShellExecute        = false,
+            CreateNoWindow         = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+        })!;
+        p.WaitForExit(10_000);
     }
 }
