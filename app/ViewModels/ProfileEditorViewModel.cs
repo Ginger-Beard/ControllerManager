@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows.Input;
 using HIDReorder.Models;
+using HIDReorder.Services;
 
 namespace HIDReorder.ViewModels;
 
@@ -56,8 +57,39 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         private set => Set(ref _isDirty, value);
     }
 
-    // Live device list from DevicesViewModel — source for the picker
+    // Live device list from DevicesViewModel — source for the picker (filtered view)
     public ObservableCollection<HidDevice> AllDevices { get; }
+
+    // Full device list used when ShowAllHid is on — populated on demand
+    private readonly ObservableCollection<HidDevice> _allDevicesExpanded = [];
+    private readonly DeviceEnumerator                _enumerator;
+    private bool                                     _showAllHid;
+
+    public bool ShowAllHid
+    {
+        get => _showAllHid;
+        set
+        {
+            if (!Set(ref _showAllHid, value)) return;
+            if (value) RefreshExpanded();
+            else       _allDevicesExpanded.Clear();
+            OnPropertyChanged(nameof(UnassignedDevices));
+        }
+    }
+
+    private void RefreshExpanded()
+    {
+        Task.Run(() =>
+        {
+            var list = _enumerator.GetAll(showAllHid: true);
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            {
+                _allDevicesExpanded.Clear();
+                foreach (var d in list) _allDevicesExpanded.Add(d);
+                OnPropertyChanged(nameof(UnassignedDevices));
+            });
+        });
+    }
 
     public ObservableCollection<DeviceRef> KeepEnabled       { get; } = [];
     public ObservableCollection<DeviceRef> DisableThenRestore { get; } = [];
@@ -65,7 +97,8 @@ public sealed class ProfileEditorViewModel : ViewModelBase
 
     // Devices not yet assigned to any list — shown in the picker
     public IEnumerable<HidDevice> UnassignedDevices =>
-        AllDevices.Where(d => !IsAssigned(d));
+        (_showAllHid ? _allDevicesExpanded : (IEnumerable<HidDevice>)AllDevices)
+            .Where(d => !IsAssigned(d));
 
     public HidDevice? SelectedAvailable
     {
@@ -97,16 +130,18 @@ public sealed class ProfileEditorViewModel : ViewModelBase
     public ICommand MoveDisableUpCommand      { get; }
     public ICommand MoveDisableDownCommand    { get; }
 
-    public ProfileEditorViewModel(ObservableCollection<HidDevice> allDevices)
+    public ProfileEditorViewModel(ObservableCollection<HidDevice> allDevices, DeviceEnumerator enumerator)
     {
-        AllDevices = allDevices;
+        AllDevices  = allDevices;
+        _enumerator = enumerator;
 
         void RefreshUnassigned(object? s, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
             => OnPropertyChanged(nameof(UnassignedDevices));
 
-        AllDevices.CollectionChanged        += RefreshUnassigned;
-        KeepEnabled.CollectionChanged       += RefreshUnassigned;
-        DisableThenRestore.CollectionChanged += RefreshUnassigned;
+        AllDevices.CollectionChanged             += RefreshUnassigned;
+        _allDevicesExpanded.CollectionChanged    += RefreshUnassigned;
+        KeepEnabled.CollectionChanged            += RefreshUnassigned;
+        DisableThenRestore.CollectionChanged     += RefreshUnassigned;
         KeepDisabled.CollectionChanged      += RefreshUnassigned;
 
         AddToKeepCommand = new RelayCommand(

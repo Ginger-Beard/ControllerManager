@@ -9,6 +9,7 @@ namespace HIDReorder.ViewModels;
 public sealed class DevicesViewModel : ViewModelBase, IDisposable
 {
     private readonly DeviceEnumerator _enumerator;
+    internal DeviceEnumerator Enumerator => _enumerator;
 
     private bool   _showAllHid;
     private bool   _isRefreshing;

@@ -157,11 +157,18 @@
                 </Grid>
 
                 <!-- Detected device picker -->
-                <TextBlock Margin="0,12,0,2">
-                    <Run Text="Detected devices — select then assign"/>
-                    <Run Text=" &#x2139;" Foreground="#888"
-                         ToolTip="Unassigned devices are not touched by this profile.&#x0a;Assign a device to at least one list if you want this profile to manage it."/>
-                </TextBlock>
+                <DockPanel Margin="0,12,0,2">
+                    <CheckBox DockPanel.Dock="Right"
+                              Content="Show all HID"
+                              IsChecked="{Binding Editor.ShowAllHid}"
+                              VerticalAlignment="Center"
+                              Margin="8,0,0,0"/>
+                    <TextBlock>
+                        <Run Text="Detected devices — select then assign"/>
+                        <Run Text=" &#x2139;" Foreground="#888"
+                             ToolTip="Unassigned devices are not touched by this profile.&#x0a;Assign a device to at least one list if you want this profile to manage it."/>
+                    </TextBlock>
+                </DockPanel>
                 <ListBox ItemsSource="{Binding Editor.UnassignedDevices}"
                          SelectedItem="{Binding Editor.SelectedAvailable}"
                          DisplayMemberPath="FriendlyName"

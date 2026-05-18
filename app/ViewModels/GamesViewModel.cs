@@ -54,7 +54,7 @@ public sealed class GamesViewModel : ViewModelBase
     {
         _store    = store;
         _profiles = store.Load();
-        Editor        = new ProfileEditorViewModel(devices.Devices);
+        Editor        = new ProfileEditorViewModel(devices.Devices, devices.Enumerator);
         HandleWatcher = new HandleWatcherViewModel(devices.Devices);
 
         foreach (var p in _profiles) Profiles.Add(p);
