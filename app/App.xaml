@@ -6,6 +6,7 @@
         <views:EnumBoolConverter  x:Key="EnumBoolConverter"/>
         <views:BoolVisConverter   x:Key="BoolVisConverter"/>
         <views:EnumVisConverter   x:Key="EnumVisConverter"/>
-        <views:BoolStringConverter x:Key="BoolStringConverter"/>
+        <views:BoolStringConverter    x:Key="BoolStringConverter"/>
+        <views:NullOrEmptyVisConverter x:Key="NullOrEmptyVisConverter"/>
     </Application.Resources>
 </Application>

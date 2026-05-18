@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Text.Json;
+using System.Windows;
 using System.Windows.Input;
 using HIDReorder.Models;
 using HIDReorder.Services;
@@ -7,13 +9,23 @@ namespace HIDReorder.ViewModels;
 
 public sealed class GamesViewModel : ViewModelBase
 {
-    private readonly ProfileStore _store;
-    private readonly List<Profile> _profiles;
+    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+
+    private readonly ProfileStore     _store;
+    private readonly List<Profile>    _profiles;
+    private readonly DevicesViewModel _devices;
 
     private Profile? _selectedProfile;
-    private bool _hasSelection;
+    private bool     _hasSelection;
+    private string   _healStatusText = "";
 
     public ObservableCollection<Profile> Profiles { get; } = [];
+
+    public string HealStatusText
+    {
+        get => _healStatusText;
+        private set => Set(ref _healStatusText, value);
+    }
 
     public Profile? SelectedProfile
     {
@@ -25,6 +37,17 @@ public sealed class GamesViewModel : ViewModelBase
                 HasSelection = value is not null;
                 if (value is not null)
                 {
+                    var healed = ProfileHealer.Heal(value, [.. _devices.Devices]);
+                    if (healed.Count > 0)
+                    {
+                        _store.Save(_profiles);
+                        HealStatusText = $"Auto-corrected {healed.Count} stale device ID(s): {string.Join(", ", healed)}";
+                    }
+                    else
+                    {
+                        HealStatusText = "";
+                    }
+
                     Editor.LoadProfile(value);
                     if (!string.IsNullOrEmpty(value.GameExecutableName))
                         HandleWatcher.ProcessName = value.GameExecutableName;
@@ -39,8 +62,8 @@ public sealed class GamesViewModel : ViewModelBase
         private set => Set(ref _hasSelection, value);
     }
 
-    public ProfileEditorViewModel  Editor         { get; }
-    public HandleWatcherViewModel  HandleWatcher  { get; }
+    public ProfileEditorViewModel  Editor        { get; }
+    public HandleWatcherViewModel  HandleWatcher { get; }
 
     public ICommand NewProfileCommand              { get; }
     public ICommand DeleteProfileCommand           { get; }
@@ -49,10 +72,13 @@ public sealed class GamesViewModel : ViewModelBase
     public ICommand CopySteamCommandCommand        { get; }
     public ICommand CreateDesktopShortcutCommand   { get; }
     public ICommand CreateStartMenuShortcutCommand { get; }
+    public ICommand ExportProfileCommand           { get; }
+    public ICommand ImportProfileCommand           { get; }
 
     public GamesViewModel(ProfileStore store, DevicesViewModel devices)
     {
         _store    = store;
+        _devices  = devices;
         _profiles = store.Load();
         Editor        = new ProfileEditorViewModel(devices.Devices, devices.Enumerator);
         HandleWatcher = new HandleWatcherViewModel(devices.Devices);
@@ -85,8 +111,8 @@ public sealed class GamesViewModel : ViewModelBase
             var idx     = _profiles.IndexOf(_selectedProfile);
             if (idx < 0) return;
 
-            _profiles[idx] = updated;
-            Profiles[idx]  = updated;
+            _profiles[idx]   = updated;
+            Profiles[idx]    = updated;
             _selectedProfile = updated;
             HasSelection = true;
             _store.Save(_profiles);
@@ -110,7 +136,7 @@ public sealed class GamesViewModel : ViewModelBase
             var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName
                    ?? "HIDReorder.exe";
             var cmd = $"\"{exe}\" --steam-wrap {_selectedProfile.Id} -- %command%";
-            System.Windows.Clipboard.SetText(cmd);
+            Clipboard.SetText(cmd);
         }, _ => _selectedProfile is not null);
 
         CreateDesktopShortcutCommand = new RelayCommand(_ =>
@@ -118,15 +144,15 @@ public sealed class GamesViewModel : ViewModelBase
             if (_selectedProfile is null) return;
             try
             {
-                var path = Services.ShortcutExporter.DesktopPath(_selectedProfile.Name);
-                Services.ShortcutExporter.CreateShortcut(path, _selectedProfile.Id, _selectedProfile.GameExecutablePath);
-                System.Windows.MessageBox.Show($"Shortcut created:\n{path}", "HID Reorder",
-                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+                var path = ShortcutExporter.DesktopPath(_selectedProfile.Name);
+                ShortcutExporter.CreateShortcut(path, _selectedProfile.Id, _selectedProfile.GameExecutablePath);
+                MessageBox.Show($"Shortcut created:\n{path}", "HID Reorder",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
-                System.Windows.MessageBox.Show($"Failed: {ex.Message}", "HID Reorder",
-                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+                MessageBox.Show($"Failed: {ex.Message}", "HID Reorder",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }, _ => _selectedProfile is not null);
 
@@ -135,16 +161,66 @@ public sealed class GamesViewModel : ViewModelBase
             if (_selectedProfile is null) return;
             try
             {
-                var path = Services.ShortcutExporter.StartMenuPath(_selectedProfile.Name);
-                Services.ShortcutExporter.CreateShortcut(path, _selectedProfile.Id, _selectedProfile.GameExecutablePath);
-                System.Windows.MessageBox.Show($"Shortcut created:\n{path}", "HID Reorder",
-                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+                var path = ShortcutExporter.StartMenuPath(_selectedProfile.Name);
+                ShortcutExporter.CreateShortcut(path, _selectedProfile.Id, _selectedProfile.GameExecutablePath);
+                MessageBox.Show($"Shortcut created:\n{path}", "HID Reorder",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
-                System.Windows.MessageBox.Show($"Failed: {ex.Message}", "HID Reorder",
-                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+                MessageBox.Show($"Failed: {ex.Message}", "HID Reorder",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }, _ => _selectedProfile is not null);
+
+        ExportProfileCommand = new RelayCommand(_ =>
+        {
+            if (_selectedProfile is null) return;
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Title      = "Export Profile",
+                Filter     = "JSON (*.json)|*.json",
+                FileName   = _selectedProfile.Name,
+                DefaultExt = ".json",
+            };
+            if (dlg.ShowDialog() != true) return;
+            try
+            {
+                File.WriteAllText(dlg.FileName, JsonSerializer.Serialize(_selectedProfile, JsonOpts));
+                MessageBox.Show($"Profile exported to:\n{dlg.FileName}", "HID Reorder",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Export failed: {ex.Message}", "HID Reorder",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }, _ => _selectedProfile is not null);
+
+        ImportProfileCommand = new RelayCommand(_ =>
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title  = "Import Profile",
+                Filter = "JSON (*.json)|*.json",
+            };
+            if (dlg.ShowDialog() != true) return;
+            try
+            {
+                var json     = File.ReadAllText(dlg.FileName);
+                var imported = JsonSerializer.Deserialize<Profile>(json, JsonOpts)
+                    ?? throw new InvalidDataException("File did not contain a valid profile.");
+                imported.Id = Guid.NewGuid(); // avoid ID collision with existing profiles
+                _profiles.Add(imported);
+                Profiles.Add(imported);
+                SelectedProfile = imported;
+                _store.Save(_profiles);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Import failed: {ex.Message}", "HID Reorder",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        });
     }
 }

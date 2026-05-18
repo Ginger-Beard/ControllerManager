@@ -54,12 +54,8 @@ HandleWatcher detects this by watching the game process for `\REGISTRY\...\Direc
 
 ## Backlog
 
-### Games tab — device picker filtering
-- The device picker in the Games tab (when assigning devices to a profile's Keep Enabled /
-  Disable→Restore / Keep Disabled lists) should have the same "Show All HID" toggle as the
-  Devices tab — currently it shows all enumerated devices with no way to filter down to just
-  game controllers. Add a checkbox or toggle to the picker so users aren't wading through
-  keyboards, fan controllers, and audio devices when building a profile.
+### Games tab — device picker filtering ✅
+- Implemented. "Show All HID" checkbox above the device picker in the Games tab.
 
 ### UAC / Steam integration
 - Steam command triggers a UAC prompt on every launch because HIDReorder.exe has
@@ -96,13 +92,18 @@ has a "Detach Command" field — put the same `--launch` there or rely on proces
 to re-enable on game exit. Works the same way for Apollo (same web UI structure as a
 Sunshine fork).
 
+### Profile device ID healing ✅
+- Implemented in `ProfileHealer.Heal()`. On profile load, stale instance IDs are matched
+  by VID+PID (FriendlyName as tiebreaker). Healed IDs are persisted and a notice is shown
+  below the profile list. Logs each correction to the app log file.
+
 ### Icon
 - Current icon is placeholder. Need a real icon — suggest something with a
   joystick/controller and a reorder/sort visual. Can use Figma or commission.
   Replace `app/app.ico` (must be .ico format, ideally multi-size: 16/32/48/256px).
 
-### Licensing
-- Add MIT `LICENSE` file to repo root
+### Licensing ✅
+- MIT `LICENSE` file added to repo root.
 
 ### Code signing
 - Apply to SignPath.io (free for OSS) — legitimate Authenticode signature, integrates with
@@ -110,12 +111,10 @@ Sunshine fork).
 - Alternative: Microsoft Trusted Signing (Azure, ~$10/mo, faster approval)
 - Until signed: Windows SmartScreen will warn on first run for most users
 
-### Export / import profiles
-- Export: serialize selected profile (or all profiles) to a JSON file via Save dialog
-- Import: load a JSON file, merge or replace existing profiles
-- Useful for backup and sharing community profiles
-- Single profile export should produce a standalone JSON anyone can drop in
-- "Import all" could be a zip of multiple profile JSONs
+### Export / import profiles ✅
+- Implemented. Export/Import buttons in the profile list panel. Export writes the selected
+  profile to a JSON file; Import reads a JSON file and adds it as a new profile. Both use
+  native file dialogs.
 
 ### Features
 - UAC-free launch via Scheduled Task (no prompt when triggering from Steam/shortcut)

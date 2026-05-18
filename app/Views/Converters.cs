@@ -34,6 +34,16 @@ public sealed class EnumVisConverter : IValueConverter
         => throw new NotSupportedException();
 }
 
+/// <summary>string → Visibility. Visible when non-null and non-empty.</summary>
+public sealed class NullOrEmptyVisConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is string s && s.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
 /// <summary>
 /// bool → one of two strings. ConverterParameter="TrueString|FalseString".
 /// </summary>

@@ -11,10 +11,21 @@
 
         <!-- ── Profile list ──────────────────────────────────── -->
         <DockPanel Grid.Column="0" Margin="8">
-            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
-                <Button Content="+" Width="36" Command="{Binding NewProfileCommand}" ToolTip="New profile"/>
-                <Button Content="−" Width="36" Margin="4,0,0,0"
-                        Command="{Binding DeleteProfileCommand}" ToolTip="Delete selected profile"/>
+            <StackPanel DockPanel.Dock="Bottom" Margin="0,6,0,0">
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="+" Width="28" Command="{Binding NewProfileCommand}" ToolTip="New profile"/>
+                    <Button Content="−" Width="28" Margin="3,0,0,0"
+                            Command="{Binding DeleteProfileCommand}" ToolTip="Delete selected profile"/>
+                    <Button Content="Export" Margin="6,0,0,0" Padding="6,2"
+                            Command="{Binding ExportProfileCommand}" ToolTip="Export selected profile to JSON"/>
+                    <Button Content="Import" Margin="3,0,0,0" Padding="6,2"
+                            Command="{Binding ImportProfileCommand}" ToolTip="Import profile from JSON"/>
+                </StackPanel>
+                <TextBlock Text="{Binding HealStatusText}"
+                           Foreground="#E07040" FontSize="10"
+                           TextWrapping="Wrap" Margin="0,5,0,0"
+                           Visibility="{Binding HealStatusText,
+                               Converter={StaticResource NullOrEmptyVisConverter}}"/>
             </StackPanel>
             <ListBox ItemsSource="{Binding Profiles}"
                      SelectedItem="{Binding SelectedProfile}"
