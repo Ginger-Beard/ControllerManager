@@ -8,8 +8,6 @@ namespace HIDReorder.Services;
 
 public static class DeviceController
 {
-    public static event EventHandler? DeviceStateChanged;
-
     public static void SetEnabled(HidDevice device, bool enable)
     {
         // Prefer the USB function node when available — some drivers (e.g. MOZA Windows
@@ -30,7 +28,6 @@ public static class DeviceController
         // avoids 2-3 separate process startups when the first node is protected.
         var candidates = BuildCandidateChain(instanceId);
         RunPnpCommandWithFallback(candidates, enable);
-        DeviceStateChanged?.Invoke(null, EventArgs.Empty);
     }
 
     // Walks up the device tree collecting: the device itself, then each ancestor with a
@@ -165,6 +162,4 @@ public static class DeviceController
     private static extern int CM_Get_Device_IDW(uint dnDevInst, StringBuilder Buffer, uint BufferLen, uint ulFlags);
 
     private const int CR_SUCCESS = 0;
-
-    private static string Escape(string s) => s.Replace("'", "''");
 }

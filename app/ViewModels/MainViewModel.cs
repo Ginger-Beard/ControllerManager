@@ -22,7 +22,20 @@ public sealed class MainViewModel : ViewModelBase
         Dashboard = new DashboardViewModel(orchestrator, App.ProfileStore);
         Settings  = new SettingsViewModel(App.SettingsStore);
 
-        DeviceController.DeviceStateChanged += OnDeviceStateChanged;
+        // Refresh the Devices tab after an orchestrator session ends so enable/disable
+        // state changes made during the flow are reflected without a manual refresh.
+        orchestrator.StateChanged += (_, state) =>
+        {
+            if (state != OrchestratorState.Idle) return;
+            _refreshDebounce?.Cancel();
+            _refreshDebounce = new CancellationTokenSource();
+            var token = _refreshDebounce.Token;
+            Task.Delay(400, token).ContinueWith(t =>
+            {
+                if (t.IsCompletedSuccessfully)
+                    System.Windows.Application.Current.Dispatcher.Invoke(Devices.Refresh);
+            });
+        };
 
         if (App.Settings.ProcessWatcherEnabled)
             processWatcher.Start();
@@ -43,15 +56,4 @@ public sealed class MainViewModel : ViewModelBase
         };
     }
 
-    private void OnDeviceStateChanged(object? sender, EventArgs e)
-    {
-        _refreshDebounce?.Cancel();
-        _refreshDebounce = new CancellationTokenSource();
-        var token = _refreshDebounce.Token;
-        Task.Delay(400, token).ContinueWith(t =>
-        {
-            if (t.IsCompletedSuccessfully)
-                System.Windows.Application.Current.Dispatcher.Invoke(Devices.Refresh);
-        });
-    }
 }

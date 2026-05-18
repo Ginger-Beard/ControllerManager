@@ -40,8 +40,8 @@ public sealed class GamesViewModel : ViewModelBase
                     var healed = ProfileHealer.Heal(value, [.. _devices.Devices]);
                     if (healed.Count > 0)
                     {
-                        _store.Save(_profiles);
                         HealStatusText = $"Auto-corrected {healed.Count} stale device ID(s): {string.Join(", ", healed)}";
+                        Task.Run(() => _store.Save(_profiles));
                     }
                     else
                     {

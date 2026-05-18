@@ -67,6 +67,8 @@ public sealed class LaunchOrchestrator : IDisposable
     public void Dispose()
     {
         _cts?.Cancel();
+        try { _flowTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
+        _cts?.Dispose();
         _watcher.Dispose();
     }
 
@@ -144,11 +146,12 @@ public sealed class LaunchOrchestrator : IDisposable
         State = OrchestratorState.LaunchingGame;
         Log($"Launching {profile.Name}...");
 
-        Process.Start(new ProcessStartInfo
+        var launched = Process.Start(new ProcessStartInfo
         {
             FileName        = profile.GameExecutablePath,
             UseShellExecute = true,
         });
+        Logger.WriteVerbose($"[Orchestrator] Process.Start returned {(launched is null ? "null (shell launch)" : launched.Id.ToString())}");
 
         var procName = ProcessName(profile.GameExecutableName);
         Log($"Waiting for {procName}.exe...");
@@ -160,6 +163,7 @@ public sealed class LaunchOrchestrator : IDisposable
             var procs = Process.GetProcessesByName(procName);
             if (procs.Length > 0)
             {
+                for (int i = 1; i < procs.Length; i++) procs[i].Dispose();
                 Log($"Found {procName}.exe (PID {procs[0].Id})");
                 return procs[0];
             }
@@ -245,9 +249,11 @@ public sealed class LaunchOrchestrator : IDisposable
         var procName = ProcessName(profile.GameExecutableName);
         Log($"Monitoring {procName}.exe — will restore Keep-Disabled devices on exit.");
 
-        while (!gameProc.HasExited)
+        while (true)
         {
             ct.ThrowIfCancellationRequested();
+            try { if (gameProc.HasExited) break; }
+            catch { break; }
             await Task.Delay(1000, ct);
         }
 

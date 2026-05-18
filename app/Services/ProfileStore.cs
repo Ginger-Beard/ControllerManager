@@ -14,12 +14,12 @@ public sealed class ProfileStore(string path)
             if (!File.Exists(path)) return [];
             return JsonSerializer.Deserialize<List<Profile>>(File.ReadAllText(path), Opts) ?? [];
         }
-        catch { return []; }
+        catch (Exception ex) { Logger.Write($"[ProfileStore] Load failed: {ex.Message}"); return []; }
     }
 
     public void Save(List<Profile> profiles)
     {
         try { File.WriteAllText(path, JsonSerializer.Serialize(profiles, Opts)); }
-        catch { }
+        catch (Exception ex) { Logger.Write($"[ProfileStore] Save failed: {ex.Message}"); }
     }
 }

@@ -130,5 +130,10 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
         if (ActivityLog.Count > 200) ActivityLog.RemoveAt(0);
     }
 
-    public void Dispose() => _orchestrator.Dispose();
+    public void Dispose()
+    {
+        _orchestrator.StateChanged   -= OnStateChanged;
+        _orchestrator.ActivityLogged -= OnActivityLogged;
+        _orchestrator.Dispose();
+    }
 }

@@ -161,8 +161,8 @@ public sealed class HandleWatcher : IDisposable
             0, false, NtDll.DUPLICATE_SAME_ACCESS))
             return null;
 
-        string? name    = null;
-        var finished    = new ManualResetEventSlim(false);
+        string? name = null;
+        using var finished = new ManualResetEventSlim(false);
 
         // NtQueryObject can hang indefinitely on certain handle types (pipes, sockets).
         // Run it on a thread pool thread with a hard timeout; close the dup handle

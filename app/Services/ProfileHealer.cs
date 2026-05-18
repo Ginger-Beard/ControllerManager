@@ -21,8 +21,8 @@ public static class ProfileHealer
         var healed  = new List<string>();
         var liveIds = liveDevices.ToDictionary(d => d.InstanceId, StringComparer.OrdinalIgnoreCase);
 
-        var allRefs = profile.KeepEnabled
-            .Concat(profile.DisableThenRestore)
+        // Only heal lists that drive device toggling; KeepEnabled is informational only.
+        var allRefs = profile.DisableThenRestore
             .Concat(profile.KeepDisabled);
 
         foreach (var r in allRefs)
