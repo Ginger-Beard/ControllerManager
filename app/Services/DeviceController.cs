@@ -66,15 +66,18 @@ public static class DeviceController
                 // Stop if no VID/PID (generic bus) or different VID (different device — e.g. USB hub)
                 if (!parentId.Contains(originalVid, StringComparison.OrdinalIgnoreCase)) break;
 
-                chain.Add(parentId);
-
-                // Stop at the composite root: has VID/PID, no interface tag.
-                // The next level up would be a USB hub — never touch it.
+                // Only add nodes that still have an interface tag (&MI_, &IG_, &Col).
+                // The composite root (VID/PID present, no tag) is intentionally excluded —
+                // some drivers (MOZA) have a buggy disable path where pnputil returns
+                // "not supported" but the device still ends up disabled in Windows.
+                // Never touching the composite root prevents that entirely.
                 bool hasInterfaceTag =
                     parentId.Contains("&MI_", StringComparison.OrdinalIgnoreCase) ||
                     parentId.Contains("&IG_", StringComparison.OrdinalIgnoreCase) ||
                     parentId.Contains("&Col", StringComparison.OrdinalIgnoreCase);
                 if (!hasInterfaceTag) break;
+
+                chain.Add(parentId);
 
                 node = parent;
             }
