@@ -95,12 +95,6 @@ to the wrapped exe. Possible approach: a small non-admin launcher exe that
 takes the steam-wrap args and uses IPC + a parallel "headless task" to invoke
 the elevated work. Defer until the .lnk path has been tested in practice.
 
-### Input monitor — joystick scatter / drift viz (polish)
-Sign-extension bug fixed (signed axes now swing around their zero point instead
-of clamping to 1.0). Still open: a 2D X/Y stick scatter widget (left + right
-stick pairs), center-zero drift visualization. Pure UI polish — needs a real
-controller for design iteration.
-
 ---
 
 ## Ship readiness

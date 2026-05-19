@@ -23,6 +23,12 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
     public ObservableCollection<HidDevice>       Devices { get; } = [];
     public ObservableCollection<AxisViewModel>   Axes    { get; } = [];
     public ObservableCollection<ButtonViewModel> Buttons { get; } = [];
+    public ObservableCollection<StickViewModel>  Sticks  { get; } = [];
+
+    // Maps each Sticks[i] to the two indexes into Axes that drive its X/Y values.
+    // (-1 in either slot means "no axis at that index" — shouldn't happen, but
+    // makes the indexer-style update loop below safe.)
+    private readonly List<(int XIdx, int YIdx)> _stickAxisIndexes = [];
 
     public bool IsMonitorExpanded
     {
@@ -229,9 +235,22 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
         Axes.Clear();
         Buttons.Clear();
+        Sticks.Clear();
+        _stickAxisIndexes.Clear();
+
         foreach (var ax in monitor.Axes) Axes.Add(new AxisViewModel(ax.Name));
         for (int i = 1; i <= monitor.TotalButtonCount; i++)
             Buttons.Add(new ButtonViewModel(i.ToString()));
+
+        // Detect 2D stick pairs from the axis list.
+        //   X (0x30) + Y (0x31)  → "Left Stick"
+        //   Rx (0x33) + Ry (0x34) → "Right Stick"
+        //   Z (0x32) + Rz (0x35)  → "Z/Rz" (often triggers, sometimes a stick;
+        //                                   we label generically so the user can tell)
+        // Generic Desktop usage page only — vendor-defined axes don't get a pad.
+        AddPairIfPresent(monitor, 0x30, 0x31, "Left Stick");
+        AddPairIfPresent(monitor, 0x33, 0x34, "Right Stick");
+        AddPairIfPresent(monitor, 0x32, 0x35, "Z / Rz");
 
         monitor.AxesUpdated    += OnAxesUpdated;
         monitor.ButtonsUpdated += OnButtonsUpdated;
@@ -241,10 +260,36 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
             Application.Current?.Dispatcher.BeginInvoke(action));
     }
 
+    private void AddPairIfPresent(HidInputMonitor monitor, ushort xUsage, ushort yUsage, string label)
+    {
+        int xIdx = -1, yIdx = -1;
+        for (int i = 0; i < monitor.Axes.Count; i++)
+        {
+            var ax = monitor.Axes[i];
+            if (ax.UsagePage != 0x01) continue;
+            if (ax.Usage == xUsage && xIdx < 0) xIdx = i;
+            if (ax.Usage == yUsage && yIdx < 0) yIdx = i;
+        }
+        if (xIdx < 0 || yIdx < 0) return;
+
+        Sticks.Add(new StickViewModel(label));
+        _stickAxisIndexes.Add((xIdx, yIdx));
+    }
+
     private void OnAxesUpdated(float[] values)
     {
         int n = Math.Min(values.Length, Axes.Count);
         for (int i = 0; i < n; i++) { Axes[i].Value = values[i]; Axes[i].RawText = values[i].ToString("0.00"); }
+
+        // Push X/Y into each detected stick pair. Bounds-check in case axes shrink
+        // between polling ticks (defensive — shouldn't happen but cheap to verify).
+        for (int s = 0; s < _stickAxisIndexes.Count && s < Sticks.Count; s++)
+        {
+            var (xIdx, yIdx) = _stickAxisIndexes[s];
+            if (xIdx < 0 || xIdx >= values.Length) continue;
+            if (yIdx < 0 || yIdx >= values.Length) continue;
+            Sticks[s].Update(values[xIdx], values[yIdx]);
+        }
     }
 
     private void OnButtonsUpdated(bool[] pressed)
@@ -265,6 +310,8 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
         }
         Axes.Clear();
         Buttons.Clear();
+        Sticks.Clear();
+        _stickAxisIndexes.Clear();
     }
 
     public void Dispose() => StopMonitor();
