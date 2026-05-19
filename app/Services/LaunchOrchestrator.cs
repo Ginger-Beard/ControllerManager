@@ -209,31 +209,41 @@ public sealed class LaunchOrchestrator : IDisposable
 
     // ── Phase 3: reveal devices one by one ───────────────────────────────────────
     //
-    // DelaySeconds is the wait BEFORE revealing each device (not after).
-    // The first device's delay protects FFB-sensitive games: the game has time to
-    // finish its startup DirectInput scan and commit slot #1 to the always-visible
-    // wheel before pedals/shifter etc. arrive. Subsequent devices' delays control
-    // inter-reveal spacing so the game's hot-plug listener processes them in order.
+    // DeviceRef.DelaySeconds is now an ABSOLUTE time from when this phase started
+    // (effectively "seconds after game launch + hide-setup"). The first device's
+    // value gates FFB-sensitive games: the wheel has time to claim slot #1 before
+    // any other device is revealed. List order is the reveal order; if a device's
+    // delay is less than the previous one's actual reveal time, it reveals
+    // immediately after the previous (clamped).
 
     private async Task RevealDisableThenRestore(Profile profile, CancellationToken ct)
     {
         State = OrchestratorState.RestoringDevices;
         Log($"Revealing {profile.DisableThenRestore.Count} device(s) in order...");
 
-        var revealed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var revealed   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var phaseStart = DateTime.UtcNow;
+        var lastRevealAtS = 0; // seconds since phaseStart of the most recent reveal
 
         foreach (var dev in profile.DisableThenRestore)
         {
             ct.ThrowIfCancellationRequested();
 
-            if (dev.DelaySeconds > 0)
+            // Target time = max(device's configured time, time of previous reveal).
+            // Then wait until target.
+            var targetAtS = Math.Max(Math.Max(0, dev.DelaySeconds), lastRevealAtS);
+            var elapsedS  = (int)(DateTime.UtcNow - phaseStart).TotalSeconds;
+            var waitS     = targetAtS - elapsedS;
+
+            if (waitS > 0)
             {
-                LogVerbose($"  Waiting {dev.DelaySeconds}s before revealing {dev.FriendlyName}...");
-                await Task.Delay(dev.DelaySeconds * 1000, ct);
+                LogVerbose($"  Waiting {waitS}s (until T+{targetAtS}s) before revealing {dev.FriendlyName}...");
+                await Task.Delay(waitS * 1000, ct);
             }
 
-            Log($"  Revealing: {dev.FriendlyName}");
+            Log($"  Revealing: {dev.FriendlyName}  (T+{targetAtS}s)");
             revealed.Add(dev.InstanceId);
+            lastRevealAtS = targetAtS;
 
             // Remaining = everything that was hidden at session start, minus what's revealed so far.
             // This preserves unassigned and Always-Hidden devices as hidden throughout.

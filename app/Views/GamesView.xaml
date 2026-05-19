@@ -101,7 +101,7 @@
                 <TextBlock Foreground="#888" FontStyle="Italic" FontSize="11"
                            VerticalAlignment="Center" Margin="8,0,0,0"
                            TextTrimming="CharacterEllipsis"
-                           Text="Drag ☰ to reorder. For FFB games, set the first Reveal-After-Start delay to 5s+."/>
+                           Text="Drag ☰ to reorder. The number on each Reveal-After-Start row is when it appears (seconds after game launch)."/>
             </DockPanel>
 
             <!-- ── Assignments list (resizable, drag-drop reorderable) ────── -->
@@ -150,7 +150,8 @@
                                                    TextTrimming="CharacterEllipsis"
                                                    Margin="0,0,8,0"/>
 
-                                        <!-- Delay field: visible only for RevealAfterStart; column reserves width either way -->
+                                        <!-- Reveal time: absolute seconds from game launch. Visible only
+                                             for RevealAfterStart; column reserves width either way. -->
                                         <StackPanel Grid.Column="2"
                                                     Orientation="Horizontal"
                                                     HorizontalAlignment="Right"
@@ -158,10 +159,12 @@
                                                     VerticalAlignment="Center"
                                                     Visibility="{Binding IsRevealAfterStart,
                                                         Converter={StaticResource BoolVisConverter}}">
-                                            <TextBox Width="35" VerticalContentAlignment="Center"
+                                            <TextBlock Text="T+" VerticalAlignment="Center" Margin="0,0,1,0"
+                                                       Foreground="#888" FontSize="11"/>
+                                            <TextBox Width="32" VerticalContentAlignment="Center"
                                                      Text="{Binding DelaySeconds, UpdateSourceTrigger=PropertyChanged}"
-                                                     ToolTip="Seconds to wait BEFORE revealing this device. Set the first Reveal-After-Start device to 5+ for FFB games (Forza, etc.) so the wheel gets slot #1 first."/>
-                                            <TextBlock Text="s" VerticalAlignment="Center" Margin="2,0,0,0"/>
+                                                     ToolTip="Seconds after game launch when this device should be revealed. List order is the reveal order — if a later device has a smaller number, it reveals right after the previous one (its number is treated as a minimum). Set the first Reveal-After-Start device to 5+ for FFB games (Forza, etc.) so the wheel claims slot #1 before anything else appears."/>
+                                            <TextBlock Text="s" VerticalAlignment="Center" Margin="1,0,0,0"/>
                                         </StackPanel>
 
                                         <ComboBox Grid.Column="3"

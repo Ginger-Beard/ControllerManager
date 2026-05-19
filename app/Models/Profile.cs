@@ -8,10 +8,16 @@ public class Profile
     public Guid Id { get; set; } = Guid.NewGuid();
 
     /// <summary>
-    /// JSON schema version. 0 = legacy (InitialDelaySeconds + per-device DelaySeconds
-    /// meant "wait AFTER reveal"). 1 = current (per-device DelaySeconds means
-    /// "wait BEFORE reveal"; no profile-level initial delay).
-    /// Bumped by ProfileEditorViewModel.LoadProfile after migration.
+    /// JSON schema version, used to migrate per-device DelaySeconds semantics:
+    ///   0 — legacy: InitialDelaySeconds + DelaySeconds meant "wait AFTER reveal"
+    ///   1 — DelaySeconds meant "wait BEFORE reveal" (relative to previous reveal)
+    ///   2 — current: DelaySeconds is the ABSOLUTE time from start of reveal phase
+    ///       when this device should be revealed. List order is reveal order;
+    ///       a device with a smaller time than the previous one reveals immediately
+    ///       after the previous (clamped). Matches users' intuition that the
+    ///       number is "the moment this device appears."
+    /// Migration runs in ProfileEditorViewModel.LoadProfile; ToProfile always
+    /// writes the current schema.
     /// </summary>
     [JsonPropertyName("schemaVersion")]
     public int SchemaVersion { get; set; } = 0;

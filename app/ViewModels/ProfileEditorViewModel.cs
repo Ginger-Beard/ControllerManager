@@ -219,31 +219,50 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         _exeName               = p.GameExecutableName;
         _processWatcherEnabled = p.ProcessWatcherEnabled;
 
-        // Migrate legacy schema-0 profiles to schema-1 timing semantics.
-        // Old: InitialDelaySeconds = wait BEFORE first reveal; per-device DelaySeconds = wait AFTER each reveal.
-        // New: per-device DelaySeconds = wait BEFORE each reveal; no profile-level initial delay.
-        // Migration: shift delays one position to the right, with InitialDelaySeconds
-        // becoming the first device's pre-delay. The old last-device.DelaySeconds is
-        // dropped (it described a wait AFTER the final reveal — visually irrelevant).
+        // Migrate to current schema-2 timing semantics (absolute "reveal at T+Xs").
         //
-        // Old Timer-mode profiles (TriggerMode=Timer, TimerSeconds>0) used TimerSeconds
-        // as the initial delay before reveals; carry that forward when InitialDelaySeconds
-        // wasn't explicitly set.
+        // Schema 0 (legacy): InitialDelaySeconds = wait BEFORE first reveal;
+        //                    DelaySeconds        = wait AFTER each reveal.
+        //   → Shift right (InitialDelaySeconds becomes first pre-delay; old last
+        //     DelaySeconds dropped since "wait after final reveal" was unobservable),
+        //     then cumulative-sum to get absolute times.
+        //
+        // Schema 1: DelaySeconds = wait BEFORE each reveal (relative).
+        //   → Cumulative-sum to get absolute times.
+        //
+        // Schema 2: already absolute — no transformation.
+        //
+        // Old Timer-mode profiles (TriggerMode=Timer, TimerSeconds>0) used
+        // TimerSeconds as the initial delay; carry that forward when
+        // InitialDelaySeconds wasn't set.
         int legacyInitial = p.InitialDelaySeconds > 0
             ? p.InitialDelaySeconds
             : (p.TriggerMode == TriggerMode.Timer ? p.TimerSeconds : 0);
 
         int[] migratedDelays;
-        if (p.SchemaVersion < 1 && p.DisableThenRestore.Count > 0)
+        if (p.DisableThenRestore.Count == 0)
         {
+            migratedDelays = [];
+        }
+        else if (p.SchemaVersion < 1)
+        {
+            // schema 0 → 2: shift + cumulative sum
             migratedDelays = new int[p.DisableThenRestore.Count];
             migratedDelays[0] = legacyInitial;
             for (int i = 1; i < p.DisableThenRestore.Count; i++)
-                migratedDelays[i] = p.DisableThenRestore[i - 1].DelaySeconds;
+                migratedDelays[i] = migratedDelays[i - 1] + p.DisableThenRestore[i - 1].DelaySeconds;
+        }
+        else if (p.SchemaVersion < 2)
+        {
+            // schema 1 → 2: cumulative sum
+            migratedDelays = new int[p.DisableThenRestore.Count];
+            migratedDelays[0] = p.DisableThenRestore[0].DelaySeconds;
+            for (int i = 1; i < p.DisableThenRestore.Count; i++)
+                migratedDelays[i] = migratedDelays[i - 1] + p.DisableThenRestore[i].DelaySeconds;
         }
         else
         {
-            // Schema-1: delays already mean "wait before reveal"
+            // schema ≥ 2: absolute already
             migratedDelays = [.. p.DisableThenRestore.Select(d => d.DelaySeconds)];
         }
 
@@ -302,7 +321,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         return new Profile
         {
             Id                    = ProfileId ?? Guid.NewGuid(),
-            SchemaVersion         = 1, // delays now mean "wait before reveal"
+            SchemaVersion         = 2, // delays are absolute "reveal at T+Xs" times
             Name                  = _name,
             GameExecutablePath    = _exePath,
             GameExecutableName    = _exeName,
