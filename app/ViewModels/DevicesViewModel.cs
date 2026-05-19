@@ -262,11 +262,18 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
     private void AddPairIfPresent(HidInputMonitor monitor, ushort xUsage, ushort yUsage, string label)
     {
-        // Only treat two axes as a "stick" when they live inside the same parent
-        // collection AND that collection's usage is a known 2D pointer (Pointer
-        // 0x01, Joystick 0x04, Game Pad 0x05). Pedals report Rx/Ry as independent
-        // axes (each in its own root-level collection or all in the root with no
-        // shared pointer parent) — they shouldn't get a joystick pad.
+        // A real 2D stick descriptor is, by HID convention:
+        //   Collection (Application, Joystick/GamePad)
+        //     Collection (Physical, Pointer)   ← LinkUsage = 0x01 (Pointer)
+        //       Usage X, Usage Y               ← exactly these two GD axes
+        //     End Collection
+        //   End Collection
+        //
+        // Sim pedals (Heusinkveld, Fanatec, MOZA pedals) typically dump three+
+        // axes at the Application Joystick level with no Pointer sub-collection
+        // and no special grouping — X/Y/Rz all share LinkUsage=0x04 (Joystick).
+        // Requiring the parent to be Pointer specifically AND to contain only
+        // these two GD axes filters those out reliably.
         int xIdx = -1, yIdx = -1;
         for (int i = 0; i < monitor.Axes.Count; i++)
         {
@@ -281,14 +288,23 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
         var y = monitor.Axes[yIdx];
         if (x.LinkCollection != y.LinkCollection) return;
 
-        // The HID Generic Desktop "stick-like" parent usages. Anything else (or
-        // no parent — LinkUsagePage = 0) means these axes aren't paired as a stick.
-        bool isStickParent = x.LinkUsagePage == 0x01 &&
-            x.LinkUsage is 0x01    // Pointer
-                       or 0x04    // Joystick
-                       or 0x05    // Game Pad
-                       or 0x39;   // Hat switch (rare, but treat as pair-able)
-        if (!isStickParent) return;
+        // Strict: only a Pointer collection (LinkUsagePage=0x01, LinkUsage=0x01)
+        // qualifies as a stick parent. Joystick/Game Pad top-level collections
+        // don't — those are application-level containers that hold whatever
+        // analog inputs the device exposes.
+        if (x.LinkUsagePage != 0x01 || x.LinkUsage != 0x01) return;
+
+        // And: the parent collection must contain only these two GD axes. If a
+        // third GD axis shares the same LinkCollection, this isn't a 2D pointer
+        // — it's a multi-axis grouping (rare but defensive).
+        int siblingsInCollection = 0;
+        for (int i = 0; i < monitor.Axes.Count; i++)
+        {
+            if (monitor.Axes[i].UsagePage == 0x01 &&
+                monitor.Axes[i].LinkCollection == x.LinkCollection)
+                siblingsInCollection++;
+        }
+        if (siblingsInCollection != 2) return;
 
         Sticks.Add(new StickViewModel(label));
         _stickAxisIndexes.Add((xIdx, yIdx));
