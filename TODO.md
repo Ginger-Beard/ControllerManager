@@ -203,30 +203,50 @@ re-enabling devices). With HidHide the reveal is instant and the orchestrator co
 timing directly — watching handles is no longer the right primitive. Keep the Desktop /
 Start Menu / Steam link buttons.
 
-### Games tab — per-device reveal delay (replaces HandleWatcher as timing mechanism)
-The HandleWatcher provided a signal ("game opened a handle to device X → now reveal the
-next one"). Without it, the only timing signal is a fixed timer (`TimerSeconds`). This
-works but is a blunt instrument — one setting applies to all devices.
+### Games tab — reveal timing: HandleWatcher vs per-device delay
+**Preference: use HandleWatcher if we can still get reliable device-acquisition signals
+from it with HidHide. Fall back to per-device timers only if we can't.**
 
-A better model: each "Reveal after start" device in the profile has its own
-**delay-before-reveal** value (in seconds, default 0 = reveal immediately after previous
-device). The orchestrator reveals them sequentially with the per-device delay applied.
+**What HandleWatcher can still do with HidHide:**
+HandleWatcher monitors the game process's open handles via `NtQueryInformationProcess`
+(class 51). It watches for `\Device\HID*` and `\REGISTRY\...\DirectInput\VID_*` patterns.
+With HidHide, the always-visible devices (KeepEnabled) are fully accessible to the game —
+the game opens handles to them normally, and HandleWatcher sees those. This means we can
+still detect "game has started and acquired device X" for any device that's in the
+always-visible list. That's the primary acquisition signal (e.g. wheel opens → FFB
+assigned → now reveal pedals).
 
-Example: profile has pedals (delay 0s) → shifter (delay 2s) → handbrake (delay 1s).
-After the initial hide phase, the orchestrator reveals pedals immediately, waits 2s,
-reveals shifter, waits 1s, reveals handbrake.
+**What HandleWatcher cannot do with HidHide:**
+When we remove a device from the session blacklist (making it accessible), HidHide does
+NOT send a Windows device-arrival notification (`WM_DEVICECHANGE / DBT_DEVICEARRIVAL`).
+pnputil did: a PnP re-enable caused Windows to announce the device, DirectInput would
+re-scan, and the game would open a new handle — HandleWatcher would detect that new open
+and use it as "game acknowledged device Y → reveal Z next". With HidHide, the game
+already tried to open the now-revealed device at startup, got `ACCESS_DENIED`, and moved
+on. It won't retry unless it's actively polling or listening for arrival events.
 
-The profile-level `TimerSeconds` / `TriggerMode` fields then only control the initial
-wait before the first reveal (how long after game launch to start the sequence at all).
-If `TriggerMode = Timer` with 5s, the orchestrator waits 5s after game detection, then
-runs the per-device reveal sequence. Per-device delays compound on top of that.
+**So the practical difference:**
+- HandleWatcher *can* signal "game has started + acquired the first always-visible device"
+  → this is the trigger to start the reveal sequence (equivalent to old acquisition signal)
+- HandleWatcher *cannot* signal "game acknowledged the just-revealed device" per-step
+  → each inter-device wait needs a timer
 
-UI: add a small numeric field (or stepper) next to each device row in the reveal list.
-Keep it optional — 0 means "reveal immediately after previous, no extra wait".
+**Preferred design: hybrid**
+1. HandleWatcher detects first handle open to an always-visible device → start reveal
+2. Between each sequential reveal: configurable per-device delay (default: 0s = immediate)
+3. Per-device delay of 0 = devices are revealed as fast as HidHide can update; a non-zero
+   delay adds a fixed pause between each device in the sequence
 
-This should fully replace HandleWatcher as the timing mechanism for the common case.
-HandleWatcher can remain available as a `TriggerMode` option for power users who want
-handle-open events to drive timing, but it shouldn't be front-and-centre in the UI.
+This gives the best of both worlds: automatic start trigger (no guessing how long the
+game takes to launch) + configurable spacing between reveals for devices that need it.
+
+The existing profile-level `TimerSeconds` / `TriggerMode` becomes the fallback for users
+who don't want HandleWatcher at all (e.g. headless Steam wrapper where no UI is open).
+
+**Still needs testing:** Confirm HandleWatcher correctly fires for always-visible devices
+under HidHide inverse whitelist mode. Should work since those devices are fully accessible
+to the game and the NtQueryInformationProcess monitoring is process-level, not dependent
+on the hiding mechanism. But worth verifying with FH6 + MOZA before relying on it.
 
 ### Profile device list — redesign for HidHide / unified UI ⬅ NEXT PRIORITY
 The current three-list model (Keep Enabled / Disable→Re-enable / Keep Disabled) was
@@ -241,11 +261,14 @@ Proposed redesign — a single ordered device list with per-row controls:
   - **Always visible** — game sees this from the start (was "Keep Enabled")
   - **Reveal after start** — hidden at launch, revealed sequentially (was "Disable→Re-enable")
   - **Always hidden** — never visible to this game (was "Keep Disabled")
-- Each "Reveal after start" row has a delay field (seconds, 0 = immediate)
+- Each "Reveal after start" row has an optional delay field (seconds, default 0 = reveal
+  immediately after previous; non-zero adds a pause between this device and the next)
 - Summary line: "Game sees 1 device at launch, then 3 revealed in sequence, 2 always hidden"
 
-Also remove the Handle Watcher expander from this tab (see above) and remove the
-Trigger Mode / Timer seconds fields once per-device delays are implemented.
+Trigger Mode (HandleWatcher vs Timer) remains at the profile level to control the initial
+acquisition wait — HandleWatcher fires when the game opens a handle to the first
+always-visible device; Timer waits a fixed number of seconds. Per-device delays layer on
+top of that. Remove the Handle Watcher debug expander panel (separate from TriggerMode).
 
 Naming audit — terms to replace once this ships (JSON keys unchanged for compatibility):
 - "Keep Enabled" → "Always Visible"
