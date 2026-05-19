@@ -80,13 +80,11 @@ public sealed class HidHideClient
     public bool IsAvailable { get; }
 
     // In-memory mirror of the session blacklist (no IOCTL_GET_SESSION_BLACKLIST exists).
-    // Updated on every Add/Update/Clear so callers can query it without extra IOCTL calls.
     private readonly HashSet<string> _sessionIds = new(StringComparer.OrdinalIgnoreCase);
     public IReadOnlySet<string> SessionBlacklistIds => _sessionIds;
 
-    private bool   _sessionActive;
+    private bool    _sessionActive;
     private string? _sessionGameNtPath;
-    private bool   _sessionUsedInverse;
 
     public HidHideClient()
     {
@@ -131,9 +129,15 @@ public sealed class HidHideClient
     // ── Game session management ───────────────────────────────────────────────────
 
     /// <summary>
-    /// Sets up HidHide for a game session:
-    /// - Inverse whitelist on: adds game exe to the "deny list" so only the game is blocked.
-    /// - All other processes retain full access to all devices.
+    /// Sets up HidHide for a game session using inverse whitelist mode:
+    /// the game exe is the only process denied access — SimHub, Pit House, joy.cpl,
+    /// and any process that starts after the session begins all retain full access.
+    ///
+    /// Note: the Devices tab persistent blacklist is also temporarily accessible to
+    /// non-game processes while the session is active (inverse mode relaxes normal-mode
+    /// blocking for everything except the game). Persistent hiding is restored when the
+    /// session ends. This is acceptable for sim racing: companion apps seeing a
+    /// persistently-hidden device during a session causes no harm.
     /// </summary>
     public void BeginGameSession(IEnumerable<string> instanceIds, string gameExePath)
     {
@@ -141,16 +145,14 @@ public sealed class HidHideClient
         var ids = instanceIds.ToList();
         if (ids.Count == 0) return;
 
-        _sessionGameNtPath  = Win32ToNtPath(gameExePath);
-        _sessionUsedInverse = true;
+        _sessionGameNtPath = Win32ToNtPath(gameExePath);
 
-        // Remove our own process from the deny list so we retain access.
-        // In inverse mode, being NOT on the list = allowed.
+        // In inverse mode, the whitelist is a deny list. Our own process must NOT be
+        // in it (being unlisted = allowed in inverse mode).
         var whitelist = GetWhitelist()
             .Where(p => !IsOurNtPath(p))
             .ToList();
 
-        // Add the game to the deny list (only the game gets blocked).
         if (!string.IsNullOrEmpty(_sessionGameNtPath) &&
             !whitelist.Contains(_sessionGameNtPath, StringComparer.OrdinalIgnoreCase))
             whitelist.Add(_sessionGameNtPath);
@@ -159,9 +161,9 @@ public sealed class HidHideClient
         SetInverse(true);
         AddSessionBlacklist(ids);
         SetActive(true);
-
-        Logger.Write($"[HidHide] Session started — inverse mode, {ids.Count} device(s) hidden, game={_sessionGameNtPath}");
         _sessionActive = true;
+
+        Logger.Write($"[HidHide] Session started — inverse mode, {ids.Count} device(s) hidden");
     }
 
     /// <summary>
@@ -179,8 +181,9 @@ public sealed class HidHideClient
     }
 
     /// <summary>
-    /// Tears down the game session: clears session blacklist, removes game from deny list,
-    /// disables inverse mode, and deactivates HidHide if no persistent entries remain.
+    /// Tears down the game session: clears the session blacklist, removes the game
+    /// exe from the inverse deny list, disables inverse mode, and deactivates HidHide
+    /// if no persistent entries remain.
     /// </summary>
     public void EndGameSession()
     {
@@ -188,34 +191,24 @@ public sealed class HidHideClient
 
         ClearSessionBlacklist();
 
-        if (_sessionUsedInverse)
+        // Remove the game exe from the (inverse) whitelist and turn off inverse mode.
+        if (!string.IsNullOrEmpty(_sessionGameNtPath))
         {
-            // Remove the game from the deny list.
-            if (!string.IsNullOrEmpty(_sessionGameNtPath))
-            {
-                var updated = GetWhitelist()
-                    .Where(p => !p.Equals(_sessionGameNtPath, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-                SetWhitelist(updated);
-            }
-            SetInverse(false);
+            var cleaned = GetWhitelist()
+                .Where(p => !p.Equals(_sessionGameNtPath, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            SetWhitelist(cleaned);
         }
+        SetInverse(false);
 
-        // Keep HidHide active only if the persistent blacklist still has entries.
         bool hasPersistent = GetBlacklist().Count > 0;
-        if (!hasPersistent)
-        {
-            SetActive(false);
-        }
-        else
-        {
-            // Ensure our process is on the allow-list for persistent device management.
+        if (hasPersistent)
             EnsureOwnPathInWhitelist();
-        }
+        else
+            SetActive(false);
 
-        _sessionActive      = false;
-        _sessionGameNtPath  = null;
-        _sessionUsedInverse = false;
+        _sessionActive     = false;
+        _sessionGameNtPath = null;
 
         Logger.Write("[HidHide] Session ended");
     }
@@ -226,17 +219,8 @@ public sealed class HidHideClient
     {
         if (!IsAvailable) return;
 
-        // Standard mode (inverse off) for persistent hiding.
-        // Make sure our process can still see the device.
-        if (GetInverse())
-        {
-            // A game session is active in inverse mode — don't touch whitelist/inverse state.
-            // Just add to blacklist; the device will be hidden from the game already.
-        }
-        else
-        {
-            EnsureOwnPathInWhitelist();
-        }
+        // Ensure our process can still see and manage the device after hiding it.
+        EnsureOwnPathInWhitelist();
 
         var existing = GetBlacklist();
         if (!existing.Contains(instanceId, StringComparer.OrdinalIgnoreCase))
@@ -291,26 +275,23 @@ public sealed class HidHideClient
 
         ClearSessionBlacklist();
 
-        if (GetInverse())
-        {
-            // Crashed during a game session with inverse mode. Clear the whitelist
-            // (removes the stale game-exe deny entry) and turn off inverse mode.
-            SetWhitelist([]);
-            SetInverse(false);
-            Logger.Write("[HidHide] Startup recovery: cleared stale inverse-mode session");
-        }
+        // Clean up any inverse mode left over from a previous crash (no longer used,
+        // but guard against stale state from old builds).
+        if (GetInverse()) SetInverse(false);
 
-        // If no persistent blacklist, ensure Active is off (clean state).
-        if (GetBlacklist().Count == 0 && GetActive())
+        bool hasPersistent = GetBlacklist().Count > 0;
+        if (!hasPersistent)
         {
             SetActive(false);
-            Logger.WriteVerbose("[HidHide] Startup recovery: deactivated (no persistent blacklist)");
+            SetWhitelist([]);
         }
-
-        // If persistent blacklist has entries and we're active, ensure our process is whitelisted.
-        if (GetBlacklist().Count > 0 && GetActive())
+        else
         {
-            EnsureOwnPathInWhitelist();
+            // Rebuild whitelist from scratch: only ControllerManager.exe.
+            // Session-era process paths from a previous run are stale and must be removed.
+            var ownNt = OwnNtPath;
+            SetWhitelist(string.IsNullOrEmpty(ownNt) ? [] : [ownNt]);
+            Logger.Write("[HidHide] Startup: persistent hiding active — whitelist reset to ControllerManager only");
         }
     }
 
