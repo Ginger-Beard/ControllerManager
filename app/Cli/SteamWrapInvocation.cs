@@ -39,7 +39,7 @@ public static class SteamWrapInvocation
                 .ToList();
 
             if (toHide.Count > 0)
-                hidHide.BeginGameSession(toHide, gameExe);
+                hidHide.BeginGameSession(toHide, keepIds, gameExe);
         }
 
         using var proc = Process.Start(new ProcessStartInfo

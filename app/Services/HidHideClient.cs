@@ -83,8 +83,9 @@ public sealed class HidHideClient
     private readonly HashSet<string> _sessionIds = new(StringComparer.OrdinalIgnoreCase);
     public IReadOnlySet<string> SessionBlacklistIds => _sessionIds;
 
-    private bool    _sessionActive;
-    private string? _sessionGameNtPath;
+    private bool          _sessionActive;
+    private string?       _sessionGameNtPath;
+    private List<string>? _sessionRestoredFromPersistent; // persistent BL entries temporarily removed
 
     public HidHideClient()
     {
@@ -178,11 +179,35 @@ public sealed class HidHideClient
 
     // ── Game session management ───────────────────────────────────────────────────
 
-    public void BeginGameSession(IEnumerable<string> instanceIds, string gameExePath)
+    /// <param name="hideIds">Devices to hide from the game (DisableThenRestore + AlwaysHidden).</param>
+    /// <param name="alwaysVisibleIds">Devices the profile says the game must see (KeepEnabled).
+    /// Any of these currently in the persistent blacklist are temporarily removed so the
+    /// profile's intent wins over the global Devices tab default.</param>
+    public void BeginGameSession(IEnumerable<string> hideIds,
+                                 IEnumerable<string> alwaysVisibleIds,
+                                 string gameExePath)
     {
         if (!IsAvailable) return;
-        var ids = instanceIds.ToList();
+        var ids = hideIds.ToList();
         if (ids.Count == 0) return;
+
+        // Temporarily remove any "always visible" devices from the persistent blacklist.
+        // Profile intent wins over global Devices tab state during a session.
+        var persistentBl = GetBlacklist();
+        var alwaysVisible = alwaysVisibleIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _sessionRestoredFromPersistent = persistentBl
+            .Where(id => alwaysVisible.Contains(id))
+            .ToList();
+
+        if (_sessionRestoredFromPersistent.Count > 0)
+        {
+            var trimmed = persistentBl
+                .Where(id => !alwaysVisible.Contains(id))
+                .ToList();
+            SetBlacklist(trimmed);
+            Logger.Write($"[HidHide] Temporarily removed {_sessionRestoredFromPersistent.Count} " +
+                         $"device(s) from persistent BL (profile overrides global)");
+        }
 
         _sessionGameNtPath = Win32ToNtPath(gameExePath);
         _sessionActive     = true;
@@ -206,8 +231,22 @@ public sealed class HidHideClient
         if (!IsAvailable) return;
 
         ClearSessionBlacklist();
-        _sessionActive     = false;
-        _sessionGameNtPath = null;
+
+        // Restore any persistent BL entries that were temporarily removed for this session.
+        if (_sessionRestoredFromPersistent?.Count > 0)
+        {
+            var current = GetBlacklist();
+            foreach (var id in _sessionRestoredFromPersistent)
+                if (!current.Contains(id, StringComparer.OrdinalIgnoreCase))
+                    current.Add(id);
+            SetBlacklist(current);
+            Logger.Write($"[HidHide] Restored {_sessionRestoredFromPersistent.Count} " +
+                         $"device(s) to persistent BL");
+        }
+
+        _sessionActive                 = false;
+        _sessionGameNtPath             = null;
+        _sessionRestoredFromPersistent = null;
         ApplyState();
 
         Logger.Write("[HidHide] Session ended");

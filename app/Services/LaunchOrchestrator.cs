@@ -162,7 +162,7 @@ public sealed class LaunchOrchestrator : IDisposable
         _sessionHiddenIds = new HashSet<string>(toHide, StringComparer.OrdinalIgnoreCase);
 
         Log($"Hiding {toHide.Count} device(s) (all except {keepIds.Count} always-visible)...");
-        _hidHide.BeginGameSession(toHide, profile.GameExecutablePath);
+        _hidHide.BeginGameSession(toHide, keepIds, profile.GameExecutablePath);
 
         foreach (var d in allDevices.Where(d => toHide.Contains(d.InstanceId)))
             Logger.WriteVerbose($"[Orchestrator]   Hidden: {d.FriendlyName}");
