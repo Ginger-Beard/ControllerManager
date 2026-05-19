@@ -15,7 +15,13 @@ namespace ControllerManager.Services;
 /// </summary>
 public sealed class HidInputMonitor : IDisposable
 {
-    public record AxisInfo(ushort UsagePage, ushort Usage, string Name, int LogicalMin, int LogicalMax);
+    public record AxisInfo(
+        ushort UsagePage, ushort Usage, string Name,
+        int LogicalMin, int LogicalMax,
+        // Parent collection identifiers, used to tell real X/Y stick pairs apart
+        // from independent axes that happen to use the same usage codes (pedals
+        // that report Rx/Ry as separate non-pointer axes, for example).
+        ushort LinkCollection, ushort LinkUsage, ushort LinkUsagePage);
     public record ButtonRange(ushort UsagePage, ushort UsageMin, ushort UsageMax);
 
     public IReadOnlyList<AxisInfo>    Axes             { get; private set; } = [];
@@ -106,7 +112,8 @@ public sealed class HidInputMonitor : IDisposable
                         if (u < 0x30 || u > 0x3F) continue;
                         axes.Add(new AxisInfo(vc.UsagePage, u,
                             HidApi.GetAxisName(vc.UsagePage, u, ++idx),
-                            vc.LogicalMin, vc.LogicalMax));
+                            vc.LogicalMin, vc.LogicalMax,
+                            vc.LinkCollection, vc.LinkUsage, vc.LinkUsagePage));
                     }
                 }
             }

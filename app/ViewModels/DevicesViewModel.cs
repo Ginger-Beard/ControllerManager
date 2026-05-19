@@ -262,6 +262,11 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
     private void AddPairIfPresent(HidInputMonitor monitor, ushort xUsage, ushort yUsage, string label)
     {
+        // Only treat two axes as a "stick" when they live inside the same parent
+        // collection AND that collection's usage is a known 2D pointer (Pointer
+        // 0x01, Joystick 0x04, Game Pad 0x05). Pedals report Rx/Ry as independent
+        // axes (each in its own root-level collection or all in the root with no
+        // shared pointer parent) — they shouldn't get a joystick pad.
         int xIdx = -1, yIdx = -1;
         for (int i = 0; i < monitor.Axes.Count; i++)
         {
@@ -271,6 +276,19 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
             if (ax.Usage == yUsage && yIdx < 0) yIdx = i;
         }
         if (xIdx < 0 || yIdx < 0) return;
+
+        var x = monitor.Axes[xIdx];
+        var y = monitor.Axes[yIdx];
+        if (x.LinkCollection != y.LinkCollection) return;
+
+        // The HID Generic Desktop "stick-like" parent usages. Anything else (or
+        // no parent — LinkUsagePage = 0) means these axes aren't paired as a stick.
+        bool isStickParent = x.LinkUsagePage == 0x01 &&
+            x.LinkUsage is 0x01    // Pointer
+                       or 0x04    // Joystick
+                       or 0x05    // Game Pad
+                       or 0x39;   // Hat switch (rare, but treat as pair-able)
+        if (!isStickParent) return;
 
         Sticks.Add(new StickViewModel(label));
         _stickAxisIndexes.Add((xIdx, yIdx));
