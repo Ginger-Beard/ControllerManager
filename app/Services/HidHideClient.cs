@@ -126,19 +126,58 @@ public sealed class HidHideClient
         _sessionIds.Clear();
     }
 
+    // ── State machine ─────────────────────────────────────────────────────────────
+    //
+    // Two modes, clean transition via ApplyState():
+    //
+    //   No session active:
+    //     Active=true (if persistent BL non-empty), Inverse=false,
+    //     Whitelist=[ControllerManager.exe]
+    //     → Devices in persistent BL hidden from all processes except CM.
+    //     → Nothing to hide: Active=false, Whitelist=[], Inverse=false.
+    //
+    //   Session active:
+    //     Active=true, Inverse=true, Whitelist=[game.exe]
+    //     → Only the game is denied. SimHub, Pit House, joy.cpl, any process that
+    //       starts during the session: all allowed automatically (not in deny list).
+    //       No enumeration, no wildcards needed.
+    //     → CM is also not in the deny list, so it retains full access — the user
+    //       never needs to know about this.
+    //
+    // ApplyState() is the ONLY function that writes Active, Whitelist, and Inverse.
+    // All callers update their data then call ApplyState(); no scattered state writes.
+
+    private void ApplyState()
+    {
+        if (_sessionActive)
+        {
+            // Inverse mode: deny list = [game.exe]. Everyone else allowed.
+            // CM is not in the deny list so it can always manage devices.
+            var deny = new List<string>();
+            if (!string.IsNullOrEmpty(_sessionGameNtPath)) deny.Add(_sessionGameNtPath);
+            SetWhitelist(deny);
+            SetInverse(true);
+            SetActive(true);
+        }
+        else if (GetBlacklist().Count > 0)
+        {
+            // Normal mode: allow list = [CM only]. Everything else denied for hidden devices.
+            var ownNt = OwnNtPath;
+            SetWhitelist(string.IsNullOrEmpty(ownNt) ? [] : [ownNt]);
+            SetInverse(false);
+            SetActive(true);
+        }
+        else
+        {
+            // Nothing to hide — completely off.
+            SetWhitelist([]);
+            SetInverse(false);
+            SetActive(false);
+        }
+    }
+
     // ── Game session management ───────────────────────────────────────────────────
 
-    /// <summary>
-    /// Sets up HidHide for a game session using inverse whitelist mode:
-    /// the game exe is the only process denied access — SimHub, Pit House, joy.cpl,
-    /// and any process that starts after the session begins all retain full access.
-    ///
-    /// Note: the Devices tab persistent blacklist is also temporarily accessible to
-    /// non-game processes while the session is active (inverse mode relaxes normal-mode
-    /// blocking for everything except the game). Persistent hiding is restored when the
-    /// session ends. This is acceptable for sim racing: companion apps seeing a
-    /// persistently-hidden device during a session causes no harm.
-    /// </summary>
     public void BeginGameSession(IEnumerable<string> instanceIds, string gameExePath)
     {
         if (!IsAvailable) return;
@@ -146,69 +185,30 @@ public sealed class HidHideClient
         if (ids.Count == 0) return;
 
         _sessionGameNtPath = Win32ToNtPath(gameExePath);
-
-        // In inverse mode, the whitelist is a deny list. Our own process must NOT be
-        // in it (being unlisted = allowed in inverse mode).
-        var whitelist = GetWhitelist()
-            .Where(p => !IsOurNtPath(p))
-            .ToList();
-
-        if (!string.IsNullOrEmpty(_sessionGameNtPath) &&
-            !whitelist.Contains(_sessionGameNtPath, StringComparer.OrdinalIgnoreCase))
-            whitelist.Add(_sessionGameNtPath);
-
-        SetWhitelist(whitelist);
-        SetInverse(true);
+        _sessionActive     = true;
         AddSessionBlacklist(ids);
-        SetActive(true);
-        _sessionActive = true;
+        ApplyState();
 
-        Logger.Write($"[HidHide] Session started — inverse mode, {ids.Count} device(s) hidden");
+        Logger.Write($"[HidHide] Session started — {ids.Count} device(s) hidden");
     }
 
-    /// <summary>
-    /// Replaces the session blacklist with a new set (used for mid-session restore of
-    /// DisableThenRestore devices — clear + re-add only the ones that should stay hidden).
-    /// </summary>
     public void UpdateSessionBlacklist(IEnumerable<string> remainingInstanceIds)
     {
         if (!IsAvailable || !_sessionActive) return;
-        ClearSessionBlacklist();      // clears _sessionIds too
+        ClearSessionBlacklist();
         var remaining = remainingInstanceIds.ToList();
-        if (remaining.Count > 0)
-            AddSessionBlacklist(remaining);   // repopulates _sessionIds
-        Logger.WriteVerbose($"[HidHide] Session blacklist updated — {remaining.Count} device(s) remaining");
+        if (remaining.Count > 0) AddSessionBlacklist(remaining);
+        Logger.WriteVerbose($"[HidHide] Session blacklist updated — {remaining.Count} remaining");
     }
 
-    /// <summary>
-    /// Tears down the game session: clears the session blacklist, removes the game
-    /// exe from the inverse deny list, disables inverse mode, and deactivates HidHide
-    /// if no persistent entries remain.
-    /// </summary>
     public void EndGameSession()
     {
         if (!IsAvailable) return;
 
         ClearSessionBlacklist();
-
-        // Remove the game exe from the (inverse) whitelist and turn off inverse mode.
-        if (!string.IsNullOrEmpty(_sessionGameNtPath))
-        {
-            var cleaned = GetWhitelist()
-                .Where(p => !p.Equals(_sessionGameNtPath, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            SetWhitelist(cleaned);
-        }
-        SetInverse(false);
-
-        bool hasPersistent = GetBlacklist().Count > 0;
-        if (hasPersistent)
-            EnsureOwnPathInWhitelist();
-        else
-            SetActive(false);
-
         _sessionActive     = false;
         _sessionGameNtPath = null;
+        ApplyState();
 
         Logger.Write("[HidHide] Session ended");
     }
@@ -219,9 +219,6 @@ public sealed class HidHideClient
     {
         if (!IsAvailable) return;
 
-        // Ensure our process can still see and manage the device after hiding it.
-        EnsureOwnPathInWhitelist();
-
         var existing = GetBlacklist();
         if (!existing.Contains(instanceId, StringComparer.OrdinalIgnoreCase))
         {
@@ -229,7 +226,10 @@ public sealed class HidHideClient
             SetBlacklist(existing);
         }
 
-        if (!GetActive()) SetActive(true);
+        // Only re-apply when no session is active — during a session ApplyState
+        // is already correct (inverse mode, game in deny list).
+        if (!_sessionActive) ApplyState();
+
         BroadcastDeviceChange();
         Logger.WriteVerbose($"[HidHide] Persistent blacklist add: {instanceId}");
     }
@@ -243,16 +243,8 @@ public sealed class HidHideClient
             .ToList();
         SetBlacklist(updated);
 
-        // If no more persistent entries and no session active, fully deactivate.
-        if (updated.Count == 0 && !_sessionActive)
-        {
-            SetActive(false);
-            // Clean up our own process from the whitelist.
-            var wl = GetWhitelist()
-                .Where(p => !IsOurNtPath(p))
-                .ToList();
-            SetWhitelist(wl);
-        }
+        if (!_sessionActive) ApplyState();
+
         BroadcastDeviceChange();
         Logger.WriteVerbose($"[HidHide] Persistent blacklist remove: {instanceId}");
     }
@@ -265,55 +257,23 @@ public sealed class HidHideClient
 
     // ── Startup recovery ──────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Called on app startup to clean up any leftover state from a previous crash
-    /// that occurred mid-session.
-    /// </summary>
     public void RecoverOnStartup()
     {
         if (!IsAvailable) return;
 
+        // Clear any stale session state from a previous crash.
         ClearSessionBlacklist();
+        _sessionActive     = false;
+        _sessionGameNtPath = null;
 
-        // Clean up any inverse mode left over from a previous crash (no longer used,
-        // but guard against stale state from old builds).
-        if (GetInverse()) SetInverse(false);
+        // ApplyState rebuilds whitelist/inverse/active correctly from the
+        // persistent blacklist entries that survived the restart.
+        ApplyState();
 
-        bool hasPersistent = GetBlacklist().Count > 0;
-        if (!hasPersistent)
-        {
-            SetActive(false);
-            SetWhitelist([]);
-        }
-        else
-        {
-            // Rebuild whitelist from scratch: only ControllerManager.exe.
-            // Session-era process paths from a previous run are stale and must be removed.
-            var ownNt = OwnNtPath;
-            SetWhitelist(string.IsNullOrEmpty(ownNt) ? [] : [ownNt]);
-            Logger.Write("[HidHide] Startup: persistent hiding active — whitelist reset to ControllerManager only");
-        }
+        Logger.Write("[HidHide] Startup recovery complete");
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────────
-
-    private void EnsureOwnPathInWhitelist()
-    {
-        var ownNt = OwnNtPath;
-        if (string.IsNullOrEmpty(ownNt)) return;
-        var existing = GetWhitelist();
-        if (!existing.Contains(ownNt, StringComparer.OrdinalIgnoreCase))
-        {
-            existing.Add(ownNt);
-            SetWhitelist(existing);
-        }
-    }
-
-    private bool IsOurNtPath(string ntPath)
-    {
-        var own = OwnNtPath;
-        return !string.IsNullOrEmpty(own) && own.Equals(ntPath, StringComparison.OrdinalIgnoreCase);
-    }
 
     private static string? _ownNtPath;
     private static string? OwnNtPath
