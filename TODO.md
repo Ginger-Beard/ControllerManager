@@ -104,16 +104,36 @@ Sunshine fork).
 - Alternative: Microsoft Trusted Signing (Azure, ~$10/mo, faster approval)
 - Until signed: Windows SmartScreen will warn on first run for most users
 
+### Dashboard — two-column live device view
+Currently the dashboard shows "Visible to game / Hidden from game" only during a session,
+derived from profile role assignments + orchestrator state. This should instead show two
+columns that reflect the real HidHide state at all times:
+
+**Left — "System" (what every process sees)**
+Devices not in the persistent HidHide blacklist. This is what Pit House, SimHub, and
+other companion apps see regardless of whether a game is running. Changes here mirror
+what the Devices tab toggle does.
+
+**Right — "Game" (what the active game sees)**
+Only shown when a session is running. Devices not in the session blacklist for this
+profile — i.e. the `KeepEnabled` devices and any `DisableThenRestore` devices that have
+been revealed. This column shrinks/grows as the reveal phase progresses.
+
+When no session is active, the right column either shows "No game running" or is hidden.
+
+**Implementation note:** The session blacklist contents are set by the orchestrator via
+`BeginGameSession` / `UpdateSessionBlacklist`, but there's no `IOCTL_GET_SESSION_BLACKLIST`
+to query them back. Track the current session blacklist in-memory in `HidHideClient`
+(a `HashSet<string> _sessionBlacklistIds`, updated on Add/Update/Clear calls) so the
+dashboard and device list can read it without additional IOCTL calls.
+
 ### Features
 - UAC-free launch via Scheduled Task (no prompt when triggering from Steam/shortcut)
-- Per-device delay-before-enable override (some devices need settle time)
 - Community profile presets (game-specific JSON contributions via PR)
-- Alternative backend options for device hiding
 
-### Architecture: two-mode complexity — where does this go?
-With HidHide as the primary backend and pnputil becoming a deprecated fallback, several
-features built specifically for the pnputil model may be unnecessary in HidHide mode, and
-the growing `if (UseHidHide)` branches are a signal worth paying attention to.
+### Architecture note (pnputil removed 2026-05-19)
+pnputil backend, StateStore, DeviceController, and VidResolver were removed. The app is
+now HidHide-only. The open questions that remain:
 
 **HandleWatcher** — may be obsolete for HidHide.
 pnputil needed it because: you PnP-disable devices before launch, the game starts and
@@ -144,21 +164,6 @@ be sufficient for most workflows. Steam wrapper (--steam-wrap) keeps the process
 playtime tracking, which is independent of device hiding — still useful but for a different
 reason.
 
-**What this means for the codebase:**
-The current structure has two fully parallel code paths with conditionals throughout
-LaunchOrchestrator, DevicesViewModel, etc. There are a few directions:
-1. **Accept the two-path model** — it's temporary; pnputil path is legacy code on its way
-   out. Keep it, don't invest in it further, remove it once HidHide adoption is confirmed.
-2. **Make HidHide the only supported path** and remove pnputil entirely. Simpler code,
-   but requires HidHide as a hard prerequisite.
-3. **Redesign around HidHide's model** as the primary abstraction, with pnputil as a thin
-   compatibility shim that maps the new API onto the old behaviour where possible.
-
-Leaning toward option 1 for now: the pnputil path is already working and tested, leave it
-alone, let the HidHide path be the one that gets new features (the profile redesign, the
-cleaner Devices tab). When HidHide has been stable for a release cycle, remove pnputil.
-The conditionals are a smell but they're contained — they don't need to be fixed urgently.
-
 **Concrete things to decide before acting:**
 - Does FH6 re-enumerate DirectInput devices after startup or is it truly one-shot? (Test:
   with HidHide, launch FH6 normally, then quickly run BeginGameSession — does the wheel
@@ -170,53 +175,82 @@ The conditionals are a smell but they're contained — they don't need to be fix
   works reliably? If process watcher covers auto-trigger and dashboard covers manual launch,
   shortcuts may just be "nice to have" for power users.
 
-### Devices tab cleanup for HidHide mode
-When HidHide is the active backend, the Devices tab shows information that belongs to
-the pnputil world and is confusing or meaningless in a HidHide context:
-- **VID:PID column**: internal plumbing — the user doesn't need it here (it's for profile
-  building and debugging, not day-to-day use). Hide when HidHide is the backend, or move
-  it to a tooltip / "Show details" toggle.
-- **Instance ID column**: even more internal. Definitely hide by default in HidHide mode.
-- **Device names**: the current name comes from WMI `Win32_PnPEntity.Name`, which may differ
-  from what HidHide's own UI shows (which uses the `BusReportedDeviceDesc` property and/or
-  HID top-level collection names). Investigate whether HidHide's naming produces cleaner
-  results and align with it when HidHide is active, so the user sees the same device name
-  across both tools.
-- **Device scope**: HidHide operates at the HID interface level. The current Devices tab
-  deduplicates by USB composite root (collapses MI_00 + MI_01 of the same physical device
-  into one row) while HidHide targets individual instance paths. Verify that what we show
-  in the Devices tab corresponds 1:1 to what we put in the HidHide blacklist — a device
-  that appears as one row in our UI should map to exactly the instance path(s) HidHide uses.
-  If there's a mismatch, the device may not actually be hidden despite the toggle showing OFF.
+### Devices tab — purpose clarification and UX cleanup
+The Devices tab operates on the **persistent HidHide blacklist** — changes here affect
+the whole computer, not just games. This needs to be clearly communicated in the UI.
 
-### Profile device list — redesign for HidHide / unified UI
+**Planned changes:**
+- Add explanatory text at the top: "Devices turned off here are hidden from your entire
+  computer. Use game profiles (Games tab) to hide devices only while a specific game runs."
+- Remove or hide the **"Hiding active" master toggle** — users don't understand what it
+  does (confirmed feedback), and it shouldn't be something they need to manage manually.
+  The toggle maps to `IOCTL_SET_ACTIVE` but the app already manages this automatically:
+  it activates when a device is added to the persistent blacklist and deactivates when the
+  blacklist is empty. Exposing it as a manual control creates confusion ("why are my
+  toggles not working?"). Remove it from the UI; keep the underlying logic automatic.
+- **VID:PID column**: move to tooltip or "Show details" toggle — internal plumbing, not
+  useful for most users day-to-day.
+- **Instance ID column**: same — tooltip only by default.
+- **Device scope**: verify that each row in the Devices tab maps to exactly the instance
+  path(s) HidHide uses in its blacklist. A row that deduplicates two HID interfaces
+  (MI_00 + MI_01) into one must add BOTH instance paths to the blacklist when toggled
+  off, or the device may not actually be fully hidden.
+
+### Games tab — Handle Watcher removal
+Remove the Handle Watcher expander from the profile editor. It was a debug tool for the
+pnputil timing problem (waiting for the game to open a DirectInput handle before
+re-enabling devices). With HidHide the reveal is instant and the orchestrator controls
+timing directly — watching handles is no longer the right primitive. Keep the Desktop /
+Start Menu / Steam link buttons.
+
+### Games tab — per-device reveal delay (replaces HandleWatcher as timing mechanism)
+The HandleWatcher provided a signal ("game opened a handle to device X → now reveal the
+next one"). Without it, the only timing signal is a fixed timer (`TimerSeconds`). This
+works but is a blunt instrument — one setting applies to all devices.
+
+A better model: each "Reveal after start" device in the profile has its own
+**delay-before-reveal** value (in seconds, default 0 = reveal immediately after previous
+device). The orchestrator reveals them sequentially with the per-device delay applied.
+
+Example: profile has pedals (delay 0s) → shifter (delay 2s) → handbrake (delay 1s).
+After the initial hide phase, the orchestrator reveals pedals immediately, waits 2s,
+reveals shifter, waits 1s, reveals handbrake.
+
+The profile-level `TimerSeconds` / `TriggerMode` fields then only control the initial
+wait before the first reveal (how long after game launch to start the sequence at all).
+If `TriggerMode = Timer` with 5s, the orchestrator waits 5s after game detection, then
+runs the per-device reveal sequence. Per-device delays compound on top of that.
+
+UI: add a small numeric field (or stepper) next to each device row in the reveal list.
+Keep it optional — 0 means "reveal immediately after previous, no extra wait".
+
+This should fully replace HandleWatcher as the timing mechanism for the common case.
+HandleWatcher can remain available as a `TriggerMode` option for power users who want
+handle-open events to drive timing, but it shouldn't be front-and-centre in the UI.
+
+### Profile device list — redesign for HidHide / unified UI ⬅ NEXT PRIORITY
 The current three-list model (Keep Enabled / Disable→Re-enable / Keep Disabled) was
-designed around pnputil's mental model of individually disabling/re-enabling devices via
-PnP. With HidHide as the primary backend, the framing shifts: devices aren't "disabled",
-they're "hidden from the game". The ordering of devices matters (which one the game sees
-first determines FFB assignment), and the three separate list boxes make that hard to see.
+designed around pnputil's mental model. With HidHide the framing is: which devices can
+the game see, in what order, and when. The three separate list boxes make ordering hard
+to see and the role names are now wrong.
 
 Proposed redesign — a single ordered device list with per-row controls:
 - One list showing all devices in the profile, in order from top to bottom
 - Up ↑ / Down ↓ buttons (or drag handles) to set the reveal order
-- Each row has a role selector, replacing the three lists:
-  - **Always visible** — game can see this device the whole time (was "Keep Enabled")
-  - **Reveal after start** — hidden at launch, revealed once game acquires the first
-    "always visible" device (was "Disable→Re-enable" / HandleWatcher phase)
+- Each row has a role selector (dropdown or toggle):
+  - **Always visible** — game sees this from the start (was "Keep Enabled")
+  - **Reveal after start** — hidden at launch, revealed sequentially (was "Disable→Re-enable")
   - **Always hidden** — never visible to this game (was "Keep Disabled")
-- The ordering within "Reveal after start" rows determines the sequential reveal sequence
-  (currently this is the order of the DisableThenRestore list)
-- The visual hierarchy makes it clear: top of the list = what the game sees first
-- Consider a summary line: "Game sees 1 device at launch, then 3 more in sequence, 2 always hidden"
+- Each "Reveal after start" row has a delay field (seconds, 0 = immediate)
+- Summary line: "Game sees 1 device at launch, then 3 revealed in sequence, 2 always hidden"
 
-Naming audit — terms to replace across the codebase and UI once this ships:
-- "Keep Enabled" → "Always Visible" (or "Always On")
-- "Disable→Re-enable" / "Disable Then Restore" → "Reveal After Start" (or "Sequential")
+Also remove the Handle Watcher expander from this tab (see above) and remove the
+Trigger Mode / Timer seconds fields once per-device delays are implemented.
+
+Naming audit — terms to replace once this ships (JSON keys unchanged for compatibility):
+- "Keep Enabled" → "Always Visible"
+- "Disable→Re-enable" / "Disable Then Restore" → "Reveal After Start"
 - "Keep Disabled" → "Always Hidden"
-- "Disabling devices" (Dashboard status) → "Hiding devices"
-- "Re-enabling" → "Revealing" or "Restoring"
-The JSON profile keys (`keepEnabled`, `disableThenRestore`, `keepDisabled`) should stay
-unchanged for backwards compatibility — rename only in UI strings and code symbols.
 - **Idle/standby device profile** — a default profile that's always active when no game
   is running. Devices listed in it stay disabled at all times unless a game profile takes
   over, then restores them to the idle state (not necessarily all-enabled) when the game
