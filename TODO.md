@@ -112,15 +112,6 @@ real controller to repro). Joystick X/Y scatter visualization, center-zero drift
 viz, and stick visuals are still backlog. Code lives in `HidInputMonitor.cs` +
 `DevicesViewModel.UpdateMonitor`.
 
-### Input monitor — Bluetooth controllers
-`DeviceEnumerator.ToDevicePath` derives `\\?\HID#VID_xxxx&PID_yyyy#{guid}` paths
-assuming USB instance IDs. Bluetooth HID instance IDs are `BTHENUM\...` or
-`BTHLEDevice\...` — the derived path may fail to open, in which case the input
-monitor silently shows nothing for BT devices. Fix: when the derived path fails,
-enumerate via `SetupDi` by interface GUID (`{4D1E55B2-F16F-11CF-88CB-001111000030}`)
-and match by instance ID. Verify dedup logic with BT too — no USB composite root,
-so `GetDedupeKey` falls back to instance ID normalization.
-
 ### Idle / standby device profile
 A "no game running" default profile: devices listed in it stay hidden until a game
 profile takes over, then restore to idle state (not all-enabled) when the game
@@ -170,8 +161,6 @@ faster). Until signed, SmartScreen warns on first run.
 - Profile ID healing: rename a device's instance ID (USB reseat, port change),
   reopen the profile in Games tab — `ProfileHealer` should rewrite it silently and
   show the orange status banner
-- Bluetooth controller: confirm input monitor opens it (will fail until the BT fix
-  above ships)
 - Devices tab toggle: verify on/off persists across app restarts; verify the BL is
   cleared cleanly on `Hide all → ON, then OFF` cycle
 
