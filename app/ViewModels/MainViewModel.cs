@@ -1,3 +1,4 @@
+using ControllerManager.Cli;
 using ControllerManager.Services;
 
 namespace ControllerManager.ViewModels;
@@ -13,10 +14,7 @@ public sealed class MainViewModel : ViewModelBase
 
     public MainViewModel()
     {
-        // Always inject the client instance so dynamic backend switches (Settings tab)
-        // take effect immediately. IsHidHideBackend / UseHidHide checks at call sites
-        // decide which path is actually used.
-        var orchestrator   = new LaunchOrchestrator(App.State, App.HidHide);
+        var orchestrator   = new LaunchOrchestrator(App.HidHide);
         var processWatcher = new ProcessWatcher(App.ProfileStore, orchestrator);
 
         Devices   = new DevicesViewModel(new DeviceEnumerator(), App.HidHide);
@@ -24,8 +22,6 @@ public sealed class MainViewModel : ViewModelBase
         Dashboard = new DashboardViewModel(orchestrator, App.ProfileStore);
         Settings  = new SettingsViewModel(App.SettingsStore);
 
-        // Refresh the Devices tab after an orchestrator session ends so enable/disable
-        // state changes made during the flow are reflected without a manual refresh.
         orchestrator.StateChanged += (_, state) =>
         {
             if (state != OrchestratorState.Idle) return;
@@ -51,11 +47,11 @@ public sealed class MainViewModel : ViewModelBase
                     System.Windows.Application.Current.Dispatcher.Invoke(
                         () => orchestrator.Start(profile));
             }
-            else if (req.Op == "restore-all")
+            else if (req.Op == "steam-wrap")
             {
-                App.State.RestoreAll();
+                _ = Task.Run(() => SteamWrapInvocation.HandleAsync(
+                    req.Args, App.HidHide, App.ProfileStore));
             }
         };
     }
-
 }

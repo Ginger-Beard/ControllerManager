@@ -14,7 +14,6 @@ public sealed class HandleWatcherViewModel : ViewModelBase, IDisposable
         new(@"VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private readonly HandleWatcher                    _watcher;
-    private readonly VidResolver                      _resolver = new();
     private readonly ObservableCollection<HidDevice>? _liveDevices;
 
     private string _processName  = "gameinputsvc";
@@ -109,7 +108,7 @@ public sealed class HandleWatcherViewModel : ViewModelBase, IDisposable
             d.VendorId.Equals(vid, StringComparison.OrdinalIgnoreCase) &&
             d.ProductId.Equals(pid, StringComparison.OrdinalIgnoreCase));
 
-        return live?.FriendlyName ?? _resolver.Resolve(vid, pid);
+        return live?.FriendlyName ?? $"{vid}:{pid}";
     }
 
     private void StartWatching()

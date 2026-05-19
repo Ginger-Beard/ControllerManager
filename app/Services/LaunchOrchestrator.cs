@@ -7,7 +7,7 @@ namespace ControllerManager.Services;
 public enum OrchestratorState
 {
     Idle,
-    DisablingDevices,
+    HidingDevices,
     LaunchingGame,
     WaitingForAcquisition,
     RestoringDevices,
@@ -19,11 +19,8 @@ public sealed class LaunchOrchestrator : IDisposable
     private static readonly Regex VidPidRx =
         new(@"VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private readonly StateStore     _stateStore;
-    private readonly HidHideClient? _hidHide;
-    private readonly HandleWatcher  _watcher = new();
-
-    private bool UseHidHide => _hidHide?.IsAvailable == true && App.UseHidHide;
+    private readonly HidHideClient _hidHide;
+    private readonly HandleWatcher _watcher = new();
 
     private OrchestratorState _state = OrchestratorState.Idle;
     private CancellationTokenSource? _cts;
@@ -40,10 +37,9 @@ public sealed class LaunchOrchestrator : IDisposable
     public event EventHandler<OrchestratorState>? StateChanged;
     public event EventHandler<string>?            ActivityLogged;
 
-    public LaunchOrchestrator(StateStore stateStore, HidHideClient? hidHide = null)
+    public LaunchOrchestrator(HidHideClient hidHide)
     {
-        _stateStore = stateStore;
-        _hidHide    = hidHide;
+        _hidHide = hidHide;
     }
 
     // ── Public API ───────────────────────────────────────────────────────────────
@@ -63,13 +59,9 @@ public sealed class LaunchOrchestrator : IDisposable
         if (_flowTask is not null)
             try { await _flowTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); } catch { }
 
-        if (UseHidHide)
-            _hidHide!.EndGameSession();
-        else
-            _stateStore.RestoreAll();
-
+        _hidHide.EndGameSession();
         State = OrchestratorState.Idle;
-        Log("Restored — all devices re-enabled.");
+        Log("Session ended — devices restored.");
     }
 
     public void Dispose()
@@ -84,7 +76,7 @@ public sealed class LaunchOrchestrator : IDisposable
 
     private async Task RunFlow(Profile profile, CancellationToken ct)
     {
-        Logger.Write($"[Orchestrator] RunFlow started — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.TriggerMode} backend={(UseHidHide ? "HidHide" : "pnputil")}");
+        Logger.Write($"[Orchestrator] RunFlow — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.TriggerMode}");
         try
         {
             HideDevices(profile, ct);
@@ -100,7 +92,7 @@ public sealed class LaunchOrchestrator : IDisposable
                 await WaitForAcquisition(profile, ct);
                 ct.ThrowIfCancellationRequested();
 
-                await RestoreDisableThenRestore(profile, ct);
+                await RevealDisableThenRestore(profile, ct);
                 ct.ThrowIfCancellationRequested();
             }
 
@@ -122,44 +114,24 @@ public sealed class LaunchOrchestrator : IDisposable
         }
     }
 
-    // ── Phase 1: hide/disable devices ────────────────────────────────────────────
+    // ── Phase 1: hide devices ─────────────────────────────────────────────────
 
     private void HideDevices(Profile profile, CancellationToken ct)
     {
-        State = OrchestratorState.DisablingDevices;
+        State = OrchestratorState.HidingDevices;
         var toHide = profile.DisableThenRestore.Concat(profile.KeepDisabled).ToList();
         if (toHide.Count == 0) return;
 
-        if (UseHidHide)
+        if (!_hidHide.IsAvailable)
         {
-            // HidHide path: one batch call, no per-device state tracking needed.
-            // The session blacklist auto-cleans when our process exits.
-            Log($"Hiding {toHide.Count} device(s) via HidHide...");
-            var ids = toHide.Select(d => d.InstanceId).ToList();
-            var exe = profile.GameExecutablePath;
-            _hidHide!.BeginGameSession(ids, exe);
-            foreach (var dev in toHide)
-                Log($"  Hidden: {dev.FriendlyName}");
+            Log("Warning: HidHide is not installed — devices will not be hidden.");
+            return;
         }
-        else
-        {
-            // pnputil path: disable each device individually, record for failsafe recovery.
-            Log($"Disabling {toHide.Count} device(s)...");
-            foreach (var dev in toHide)
-            {
-                ct.ThrowIfCancellationRequested();
-                try
-                {
-                    _stateStore.RecordDisabledRef(dev);
-                    DeviceController.SetEnabledById(dev.InstanceId, false);
-                    Log($"  Disabled: {dev.FriendlyName}");
-                }
-                catch (Exception ex)
-                {
-                    Log($"  Warning: could not disable {dev.FriendlyName} — {ex.Message}");
-                }
-            }
-        }
+
+        Log($"Hiding {toHide.Count} device(s)...");
+        _hidHide.BeginGameSession(toHide.Select(d => d.InstanceId), profile.GameExecutablePath);
+        foreach (var dev in toHide)
+            Log($"  Hidden: {dev.FriendlyName}");
     }
 
     // ── Phase 2: launch ──────────────────────────────────────────────────────────
@@ -196,7 +168,7 @@ public sealed class LaunchOrchestrator : IDisposable
         throw new TimeoutException($"'{procName}.exe' did not start within 60 seconds.");
     }
 
-    // ── Phase 3: wait for FFB/acquisition ────────────────────────────────────────
+    // ── Phase 3: wait for acquisition ────────────────────────────────────────────
 
     private async Task WaitForAcquisition(Profile profile, CancellationToken ct)
     {
@@ -206,12 +178,11 @@ public sealed class LaunchOrchestrator : IDisposable
         {
             Log($"Waiting {profile.TimerSeconds}s for game to acquire devices...");
             await Task.Delay(profile.TimerSeconds * 1000, ct);
-            Log("Timer elapsed — starting re-enable.");
+            Log("Timer elapsed — revealing devices.");
             return;
         }
 
-        // HandleWatcher: wait for first device event (only KeepEnabled devices visible at this point)
-        Log("Watching for game to acquire wheel (first DirectInput/HID event)...");
+        Log("Watching for game to acquire first device (HandleWatcher)...");
         var ev = await WaitForAnyDeviceEvent(timeoutMs: 120_000, ct);
         if (ev is not null)
             Log($"Acquisition signal: {ev.DevicePath}");
@@ -219,15 +190,15 @@ public sealed class LaunchOrchestrator : IDisposable
             LogVerbose("Acquisition timeout — proceeding anyway.");
     }
 
-    // ── Phase 4: restore DisableThenRestore devices one by one ───────────────────
+    // ── Phase 4: reveal DisableThenRestore devices one by one ────────────────────
 
-    private async Task RestoreDisableThenRestore(Profile profile, CancellationToken ct)
+    private async Task RevealDisableThenRestore(Profile profile, CancellationToken ct)
     {
         State = OrchestratorState.RestoringDevices;
-        Log($"Re-enabling {profile.DisableThenRestore.Count} device(s) in order...");
+        Log($"Revealing {profile.DisableThenRestore.Count} device(s) in order...");
 
-        var restored    = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var keepHidden  = profile.KeepDisabled.Select(d => d.InstanceId).ToList();
+        var revealed   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var keepHidden = profile.KeepDisabled.Select(d => d.InstanceId).ToList();
 
         foreach (var dev in profile.DisableThenRestore)
         {
@@ -235,33 +206,22 @@ public sealed class LaunchOrchestrator : IDisposable
 
             try
             {
-                Log($"  Enabling: {dev.FriendlyName}");
+                Log($"  Revealing: {dev.FriendlyName}");
+                revealed.Add(dev.InstanceId);
 
-                if (UseHidHide)
-                {
-                    // Remove only this device from the session blacklist by rebuilding
-                    // the remaining list: KeepDisabled + not-yet-restored DisableThenRestore.
-                    restored.Add(dev.InstanceId);
-                    var remaining = profile.DisableThenRestore
-                        .Where(d => !restored.Contains(d.InstanceId))
-                        .Select(d => d.InstanceId)
-                        .Concat(keepHidden)
-                        .ToList();
-                    _hidHide!.UpdateSessionBlacklist(remaining);
-                }
-                else
-                {
-                    DeviceController.SetEnabledById(dev.InstanceId, true);
-                    _stateStore.ClearEnabledById(dev.InstanceId);
-                }
+                var remaining = profile.DisableThenRestore
+                    .Where(d => !revealed.Contains(d.InstanceId))
+                    .Select(d => d.InstanceId)
+                    .Concat(keepHidden)
+                    .ToList();
+                _hidHide.UpdateSessionBlacklist(remaining);
             }
             catch (Exception ex)
             {
-                Log($"  Warning: could not enable {dev.FriendlyName} — {ex.Message}");
+                Log($"  Warning: {dev.FriendlyName} — {ex.Message}");
                 continue;
             }
 
-            // Wait for the game to acknowledge this device (both backends).
             if (profile.TriggerMode == TriggerMode.HandleWatcher)
             {
                 var (vid, pid) = ParseVidPid(dev.InstanceId);
@@ -280,7 +240,7 @@ public sealed class LaunchOrchestrator : IDisposable
             }
         }
 
-        Log("All Disable→Restore devices re-enabled.");
+        Log("All Disable→Restore devices revealed.");
     }
 
     // ── Phase 5: monitor until exit ──────────────────────────────────────────────
@@ -289,7 +249,7 @@ public sealed class LaunchOrchestrator : IDisposable
     {
         State = OrchestratorState.Monitoring;
         var procName = ProcessName(profile.GameExecutableName);
-        Log($"Monitoring {procName}.exe — will restore Keep-Disabled devices on exit.");
+        Log($"Monitoring {procName}.exe...");
 
         while (true)
         {
@@ -300,36 +260,8 @@ public sealed class LaunchOrchestrator : IDisposable
         }
 
         Log($"{procName}.exe exited.");
-
-        if (UseHidHide)
-        {
-            // End session: clears session blacklist + inverse whitelist, deactivates if no persistent entries.
-            if (profile.KeepDisabled.Count > 0)
-                Log($"Restoring {profile.KeepDisabled.Count} Keep-Disabled device(s)...");
-            _hidHide!.EndGameSession();
-            Log("All devices restored.");
-        }
-        else
-        {
-            // pnputil path: re-enable KeepDisabled devices and clear state records.
-            if (profile.KeepDisabled.Count > 0)
-            {
-                Log($"Re-enabling {profile.KeepDisabled.Count} Keep-Disabled device(s)...");
-                foreach (var dev in profile.KeepDisabled)
-                {
-                    try
-                    {
-                        DeviceController.SetEnabledById(dev.InstanceId, true);
-                        _stateStore.ClearEnabledById(dev.InstanceId);
-                        Log($"  Enabled: {dev.FriendlyName}");
-                    }
-                    catch (Exception ex)
-                    {
-                        Log($"  Warning: could not enable {dev.FriendlyName} — {ex.Message}");
-                    }
-                }
-            }
-        }
+        _hidHide.EndGameSession();
+        Log("Session ended — devices restored.");
     }
 
     // ── HandleWatcher helpers ────────────────────────────────────────────────────
@@ -339,11 +271,7 @@ public sealed class LaunchOrchestrator : IDisposable
         var tcs = new TaskCompletionSource<HidHandleEvent?>();
 
         EventHandler<HidHandleEvent> handler = null!;
-        handler = (_, e) =>
-        {
-            _watcher.HidHandleOpened -= handler;
-            tcs.TrySetResult(e);
-        };
+        handler = (_, e) => { _watcher.HidHandleOpened -= handler; tcs.TrySetResult(e); };
         _watcher.HidHandleOpened += handler;
 
         Task.Delay(timeoutMs, ct).ContinueWith(_ =>
@@ -392,17 +320,13 @@ public sealed class LaunchOrchestrator : IDisposable
         return (m.Groups[1].Value.ToUpperInvariant(), m.Groups[2].Value.ToUpperInvariant());
     }
 
-    private void Log(string message)
-    {
-        var line = $"{DateTime.Now:HH:mm:ss}  {message}";
-        ActivityLogged?.Invoke(this, line);
-    }
+    private void Log(string message) =>
+        ActivityLogged?.Invoke(this, $"{DateTime.Now:HH:mm:ss}  {message}");
 
     private void LogVerbose(string message)
     {
-        var line = $"{DateTime.Now:HH:mm:ss}  {message}";
-        Logger.Write(line);
+        Logger.Write($"{DateTime.Now:HH:mm:ss}  {message}");
         if (Logger.CurrentLevel >= LogLevel.Verbose)
-            ActivityLogged?.Invoke(this, line);
+            ActivityLogged?.Invoke(this, $"{DateTime.Now:HH:mm:ss}  {message}");
     }
 }

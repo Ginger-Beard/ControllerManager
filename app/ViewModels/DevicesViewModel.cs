@@ -9,7 +9,7 @@ namespace ControllerManager.ViewModels;
 public sealed class DevicesViewModel : ViewModelBase, IDisposable
 {
     private readonly DeviceEnumerator _enumerator;
-    private readonly HidHideClient?   _hidHide;
+    private readonly HidHideClient   _hidHide;
     internal DeviceEnumerator Enumerator => _enumerator;
 
     private bool   _showAllHid;
@@ -25,9 +25,6 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
     public ObservableCollection<AxisViewModel>   Axes    { get; } = [];
     public ObservableCollection<ButtonViewModel> Buttons { get; } = [];
 
-    /// <summary>True when HidHide is the active backend for this session.</summary>
-    public bool IsHidHideBackend => _hidHide?.IsAvailable == true && App.UseHidHide;
-
     /// <summary>Maps directly to IOCTL_SET_ACTIVE — master on/off for all HidHide hiding.</summary>
     public bool HidHideActive
     {
@@ -35,7 +32,7 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
         set
         {
             if (!Set(ref _hidHideActive, value)) return;
-            Task.Run(() => _hidHide?.SetActive(value));
+            Task.Run(() => _hidHide.SetActive(value));
         }
     }
 
@@ -82,11 +79,11 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
     public ICommand CopyInstanceIdCommand    { get; }
     public ICommand CopyInterfacePathCommand { get; }
 
-    public DevicesViewModel(DeviceEnumerator enumerator, HidHideClient? hidHide = null)
+    public DevicesViewModel(DeviceEnumerator enumerator, HidHideClient hidHide)
     {
-        _enumerator  = enumerator;
-        _hidHide     = hidHide;
-        _hidHideActive = hidHide?.IsAvailable == true && hidHide.GetActive();
+        _enumerator    = enumerator;
+        _hidHide       = hidHide;
+        _hidHideActive = hidHide.IsAvailable && hidHide.GetActive();
 
         RefreshCommand = new RelayCommand(_ => Refresh(), _ => !IsRefreshing);
         CopyAllCommand = new RelayCommand(_ =>
@@ -125,10 +122,9 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
             {
                 var list = _enumerator.GetAll(_showAllHid);
 
-                // Overlay HidHide persistent blacklist state so devices toggled off in the
-                // Devices tab appear as OFF even though they remain PnP-enabled.
+                // Overlay HidHide persistent blacklist so toggled-off devices show as OFF.
                 bool activeState = false;
-                if (IsHidHideBackend && _hidHide != null)
+                if (_hidHide.IsAvailable)
                 {
                     var blacklist = _hidHide.GetBlacklist();
                     activeState   = _hidHide.GetActive();
@@ -142,11 +138,8 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
                 Application.Current.Dispatcher.Invoke(() =>
                 {
                     MergeDevices(list);
-                    if (IsHidHideBackend)
-                    {
-                        _hidHideActive = activeState;
-                        OnPropertyChanged(nameof(HidHideActive));
-                    }
+                    _hidHideActive = activeState;
+                    OnPropertyChanged(nameof(HidHideActive));
                     StatusText   = $"{list.Count} device(s) found.";
                     IsRefreshing = false;
                 });
@@ -164,33 +157,32 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
     private void MergeDevices(List<HidDevice> incoming)
     {
-        // Remove devices that disappeared
         for (int i = Devices.Count - 1; i >= 0; i--)
         {
             if (!incoming.Any(d => d.InstanceId == Devices[i].InstanceId))
                 Devices.RemoveAt(i);
         }
 
-        // Update changed items and insert new ones
         for (int i = 0; i < incoming.Count; i++)
         {
             var next     = incoming[i];
             var existing = Devices.FirstOrDefault(d => d.InstanceId == next.InstanceId);
 
             if (existing is null)
-            {
                 Devices.Insert(Math.Min(i, Devices.Count), next);
-            }
             else
-            {
                 existing.IsEnabled = next.IsEnabled;
-            }
         }
     }
 
     private void ToggleEnabled(HidDevice? device)
     {
         if (device is null) return;
+        if (!_hidHide.IsAvailable)
+        {
+            StatusText = "HidHide is not installed.";
+            return;
+        }
 
         IsRefreshing = true;
         StatusText   = device.IsEnabled
@@ -201,25 +193,10 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
         {
             try
             {
-                if (IsHidHideBackend && _hidHide != null)
-                {
-                    // HidHide path: modify the persistent blacklist.
-                    if (device.IsEnabled)
-                        _hidHide.AddToPersistentBlacklist(device.InstanceId);
-                    else
-                        _hidHide.RemoveFromPersistentBlacklist(device.InstanceId);
-                }
+                if (device.IsEnabled)
+                    _hidHide.AddToPersistentBlacklist(device.InstanceId);
                 else
-                {
-                    // pnputil path: PnP disable/enable with failsafe state.
-                    if (device.IsEnabled)
-                        App.State.RecordDisabled(device);
-
-                    DeviceController.SetEnabled(device, !device.IsEnabled);
-
-                    if (!device.IsEnabled)
-                        App.State.ClearEnabled(device);
-                }
+                    _hidHide.RemoveFromPersistentBlacklist(device.InstanceId);
 
                 Application.Current.Dispatcher.Invoke(Refresh);
             }
@@ -244,10 +221,7 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
     private void UpdateMonitor()
     {
-        // Always tear down the previous monitor first so handlers and handles
-        // from the old device are released before a new one is opened.
         StopMonitor();
-
         if (!_isMonitorExpanded) return;
         if (_selectedDevice is null) return;
 
@@ -255,11 +229,7 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
         if (string.IsNullOrEmpty(path)) return;
 
         var monitor = new HidInputMonitor();
-        if (!monitor.Open(path))
-        {
-            monitor.Dispose();
-            return;
-        }
+        if (!monitor.Open(path)) { monitor.Dispose(); return; }
 
         Axes.Clear();
         Buttons.Clear();
@@ -267,7 +237,7 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
         for (int i = 1; i <= monitor.TotalButtonCount; i++)
             Buttons.Add(new ButtonViewModel(i.ToString()));
 
-        monitor.AxesUpdated += OnAxesUpdated;
+        monitor.AxesUpdated    += OnAxesUpdated;
         monitor.ButtonsUpdated += OnButtonsUpdated;
 
         _monitor = monitor;
@@ -278,18 +248,13 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
     private void OnAxesUpdated(float[] values)
     {
         int n = Math.Min(values.Length, Axes.Count);
-        for (int i = 0; i < n; i++)
-        {
-            Axes[i].Value   = values[i];
-            Axes[i].RawText = values[i].ToString("0.00");
-        }
+        for (int i = 0; i < n; i++) { Axes[i].Value = values[i]; Axes[i].RawText = values[i].ToString("0.00"); }
     }
 
     private void OnButtonsUpdated(bool[] pressed)
     {
         int n = Math.Min(pressed.Length, Buttons.Count);
-        for (int i = 0; i < n; i++)
-            Buttons[i].IsPressed = pressed[i];
+        for (int i = 0; i < n; i++) Buttons[i].IsPressed = pressed[i];
     }
 
     private void StopMonitor()

@@ -5,12 +5,6 @@ namespace ControllerManager.Models;
 
 public enum LogLevel { Off, Normal, Verbose }
 
-/// <summary>
-/// Which device-hiding backend to use.
-/// Auto = HidHide when installed, pnputil otherwise.
-/// </summary>
-public enum DeviceHidingBackend { Auto, HidHide, Pnputil }
-
 public sealed class AppSettings
 {
     [JsonPropertyName("startWithWindows")]
@@ -27,7 +21,4 @@ public sealed class AppSettings
 
     [JsonPropertyName("alwaysOnTop")]
     public bool AlwaysOnTop { get; set; }
-
-    [JsonPropertyName("deviceHidingBackend")]
-    public DeviceHidingBackend DeviceHidingBackend { get; set; } = DeviceHidingBackend.Auto;
 }

@@ -88,7 +88,7 @@ public sealed class TrayService : IDisposable
         var exitItem = new System.Windows.Forms.ToolStripMenuItem("Exit");
         exitItem.Click += (_, _) =>
         {
-            App.State.RestoreAll();
+            App.HidHide.EndGameSession();
             _icon.Visible = false;
             Application.Current.Shutdown();
         };

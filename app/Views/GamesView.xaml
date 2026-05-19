@@ -170,7 +170,7 @@
                 <!-- Detected device picker -->
                 <DockPanel Margin="0,12,0,2">
                     <CheckBox DockPanel.Dock="Right"
-                              Content="Show all HID"
+                              Content="Show all devices"
                               IsChecked="{Binding Editor.ShowAllHid}"
                               VerticalAlignment="Center"
                               Margin="8,0,0,0"/>

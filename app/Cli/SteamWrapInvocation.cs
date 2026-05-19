@@ -10,68 +10,44 @@ namespace ControllerManager.Cli;
 ///   "C:\path\ControllerManager.exe" --steam-wrap {profileId} -- %command%
 ///
 /// Flow:
-///   1. Disable profile devices (DisableThenRestore + KeepDisabled)
+///   1. Hide profile devices via HidHide (session blacklist — auto-cleans if we crash)
 ///   2. Launch the real game command (args after --)
 ///   3. Wait for the game process to exit
-///   4. Re-enable all devices
+///   4. Clear HidHide session
 ///
 /// This process stays alive so Steam correctly tracks playtime.
 /// </summary>
 public static class SteamWrapInvocation
 {
-    public static async Task HandleAsync(string[] args, StateStore state, ProfileStore profiles)
+    public static async Task HandleAsync(string[] args, HidHideClient hidHide, ProfileStore profiles)
     {
-        // Parse: --steam-wrap <profileId> -- <game args...>
-        if (args.Length < 3) return;
+        if (args.Length < 1) return;
         if (!Guid.TryParse(args[0], out var id)) return;
 
         int sep = Array.IndexOf(args, "--");
         if (sep < 0 || sep + 1 >= args.Length) return;
 
         var gameArgs = args[(sep + 1)..];
+        var gameExe  = gameArgs[0];
 
         var profile = profiles.Load().FirstOrDefault(p => p.Id == id);
         if (profile is null) return;
 
-        // Disable devices
-        var toDisable = profile.DisableThenRestore.Concat(profile.KeepDisabled).ToList();
-        foreach (var dev in toDisable)
-        {
-            try
-            {
-                state.RecordDisabledRef(dev);
-                DeviceController.SetEnabledById(dev.InstanceId, false);
-            }
-            catch { }
-        }
-
-        // Launch the real game command
-        // gameArgs[0] is the exe, rest are arguments
-        var gameExe  = gameArgs[0];
-        var gameRest = gameArgs.Length > 1 ? string.Join(" ", gameArgs[1..]) : "";
+        var toHide = profile.DisableThenRestore.Concat(profile.KeepDisabled).ToList();
+        if (toHide.Count > 0 && hidHide.IsAvailable)
+            hidHide.BeginGameSession(toHide.Select(d => d.InstanceId), gameExe);
 
         using var proc = Process.Start(new ProcessStartInfo
         {
             FileName        = gameExe,
-            Arguments       = gameRest,
+            Arguments       = gameArgs.Length > 1 ? string.Join(" ", gameArgs[1..]) : "",
             UseShellExecute = true,
         });
 
-        if (proc is null) goto restore;
+        if (proc is not null)
+            await proc.WaitForExitAsync();
 
-        // Wait for game to exit
-        await proc.WaitForExitAsync();
-
-    restore:
-        // Re-enable everything we disabled
-        foreach (var dev in toDisable)
-        {
-            try
-            {
-                DeviceController.SetEnabledById(dev.InstanceId, true);
-                state.ClearEnabledById(dev.InstanceId);
-            }
-            catch { }
-        }
+        if (toHide.Count > 0 && hidHide.IsAvailable)
+            hidHide.EndGameSession();
     }
 }

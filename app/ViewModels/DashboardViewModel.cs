@@ -108,13 +108,13 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
             IsRunning  = state != OrchestratorState.Idle;
             StatusText = state switch
             {
-                OrchestratorState.DisablingDevices    => "Disabling devices...",
-                OrchestratorState.LaunchingGame       => "Launching game...",
-                OrchestratorState.WaitingForAcquisition => "Waiting for game to acquire wheel...",
-                OrchestratorState.RestoringDevices    => "Re-enabling devices...",
-                OrchestratorState.Monitoring          => "Game running — monitoring for exit...",
-                OrchestratorState.Idle                => "Ready.",
-                _                                     => state.ToString(),
+                OrchestratorState.HidingDevices         => "Hiding devices...",
+                OrchestratorState.LaunchingGame         => "Launching game...",
+                OrchestratorState.WaitingForAcquisition => "Waiting for game to acquire devices...",
+                OrchestratorState.RestoringDevices      => "Revealing devices...",
+                OrchestratorState.Monitoring            => "Game running — monitoring for exit...",
+                OrchestratorState.Idle                  => "Ready.",
+                _                                       => state.ToString(),
             };
         });
     }
