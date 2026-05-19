@@ -102,16 +102,6 @@ real controller to repro). Joystick X/Y scatter visualization, center-zero drift
 viz, and stick visuals are still backlog. Code lives in `HidInputMonitor.cs` +
 `DevicesViewModel.UpdateMonitor`.
 
-### Idle / standby device profile
-A "no game running" default profile: devices listed in it stay hidden until a game
-profile takes over, then restore to idle state (not all-enabled) when the game
-exits. Use case: keep the entire sim rig invisible to other apps by default, only
-surface devices when a sim game runs. Open design questions:
-- Modeled as a special profile, or a separate layer on top of the persistent BL?
-- Does game-profile exit restore to idle state or to all-enabled? (Currently the
-  latter — needs unifying with idle if it ships.)
-- Activates on app start, or only after the first game session ends?
-
 ---
 
 ## Ship readiness
