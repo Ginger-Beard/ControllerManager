@@ -1,0 +1,24 @@
+<UserControl x:Class="ControllerManager.Views.AxisBar"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ControllerManager.ViewModels"
+             d:DataContext="{d:DesignInstance Type=vm:AxisViewModel}"
+             mc:Ignorable="d"
+             Height="10">
+    <Grid x:Name="Root" Background="#EEE" ClipToBounds="True"
+          SizeChanged="Root_SizeChanged">
+        <!-- Order matters (back to front):
+             1. Deadzone band (translucent green) — drawn first so the fill sits on top
+             2. Fill bar (orange) — current value
+             3. Border — thin grey outline                                              -->
+        <Rectangle x:Name="DeadzoneRect" Fill="#3060B370"
+                   HorizontalAlignment="Left" VerticalAlignment="Stretch"
+                   IsHitTestVisible="False"/>
+        <Rectangle x:Name="FillRect" Fill="#E07040"
+                   HorizontalAlignment="Left" VerticalAlignment="Stretch"
+                   IsHitTestVisible="False"/>
+        <Rectangle Stroke="#888" StrokeThickness="1" IsHitTestVisible="False"/>
+    </Grid>
+</UserControl>
