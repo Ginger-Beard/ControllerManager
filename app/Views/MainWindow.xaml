@@ -350,17 +350,6 @@
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
 
-                                <!-- Input caps summary -->
-                                <GridViewColumn Header="Inputs" Width="70">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding InputSummary}"
-                                                       FontSize="10"
-                                                       Foreground="#777"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-
                                 <!-- Enable/disable toggle -->
                                 <GridViewColumn Header="State" Width="80">
                                     <GridViewColumn.CellTemplate>
