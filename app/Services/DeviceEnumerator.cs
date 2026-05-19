@@ -63,14 +63,6 @@ public sealed class DeviceEnumerator
     private static extern int CM_Get_Parent(
         out uint pdnDevInst, uint dnDevInst, uint ulFlags);
 
-    [DllImport("CfgMgr32.dll")]
-    private static extern int CM_Get_Device_ID_Size(
-        out uint pulLen, uint dnDevInst, uint ulFlags);
-
-    [DllImport("CfgMgr32.dll", CharSet = CharSet.Unicode)]
-    private static extern int CM_Get_Device_IDW(
-        uint dnDevInst, StringBuilder Buffer, uint BufferLen, uint ulFlags);
-
     [DllImport("CfgMgr32.dll", CharSet = CharSet.Unicode)]
     private static extern int CM_Get_DevNode_PropertyW(
         uint dnDevInst, ref DEVPROPKEY PropertyKey, out uint PropertyType,
@@ -79,6 +71,7 @@ public sealed class DeviceEnumerator
     private const int  CR_SUCCESS    = 0;
     private const int  CR_BUFFER_SMALL = 0x0000001A;
     private const uint DEVPROP_TYPE_STRING = 0x12;
+    private const uint DEVPROP_TYPE_GUID   = 0x0D;
     private const uint CM_LOCATE_DEVNODE_PHANTOM = 0x1;
 
     // ── VID/PID regex (for AlternativeInstanceId fallback) ───────────────────────
@@ -86,15 +79,12 @@ public sealed class DeviceEnumerator
     private static readonly Regex VidRx = new(@"VID_([0-9A-Fa-f]{4})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex PidRx = new(@"PID_([0-9A-Fa-f]{4})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex MiRx  = new(@"&MI_([0-9A-Fa-f]+)",   RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex InterfaceTagRx = new(
-        @"&(?:MI_|Col)[0-9A-Fa-f]+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // ── Public API ────────────────────────────────────────────────────────────────
 
     public List<HidDevice> GetAll(bool showAllHid = false)
     {
         var instanceIds  = GetHidClassDeviceIds();
-        var seenKeys     = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var results      = new List<HidDevice>();
         var vidPidCount  = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         // USB function nodes: collected during enumeration for pnputil AlternativeInstanceId.
@@ -116,68 +106,97 @@ public sealed class DeviceEnumerator
             }
         }
 
-        // Second pass: enumerate HID interfaces.
+        // Second pass: group HID children by Windows ContainerId. All children of one
+        // physical device share the same ContainerId GUID, matching HidHide's own
+        // grouping (HID.cpp:157 / BlacklistDlg.cpp:300). Devices without a ContainerId
+        // (or with GUID_NULL) are treated as standalone — their own instance ID is
+        // used as the group key so they still get a row but with no siblings.
+        var groups = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         foreach (var instanceId in instanceIds)
         {
             if (instanceId.StartsWith("USB\\",  StringComparison.OrdinalIgnoreCase)) continue;
             if (instanceId.StartsWith("ROOT\\", StringComparison.OrdinalIgnoreCase)) continue;
 
-            // Get the HID symbolic link (device path) via SetupDi — same method HidHide uses.
-            // When a device is PnP-disabled the interface is deregistered and SetupDi returns
-            // null. Fall back to the derived path so pnputil-disabled devices stay visible.
-            var symbolicLink = SetupApi.GetSymbolicLink(HidInterfaceGuid, instanceId)
-                               ?? HidApi.ToDevicePath(instanceId);
+            var key = GetContainerId(instanceId) ?? instanceId;
+            if (!groups.TryGetValue(key, out var list))
+                groups[key] = list = [];
+            list.Add(instanceId);
+        }
 
-            // Open the device to read HID string descriptors and capabilities.
-            var info = QueryHidDeviceInfo(instanceId, symbolicLink);
+        // Third pass: build a HidDevice per group. The "primary" child is the first
+        // gaming HID interface we find with full access (or just the first interface
+        // if none are accessible); other children are recorded in ChildInstanceIds.
+        // Hiding writes the whole set; only the primary is opened for capability info.
+        foreach (var (_, children) in groups)
+        {
+            // Probe each child once. The primary is whichever one looks like a gaming
+            // device (so MI_01 audio/keyboard composites still pick the right interface
+            // for the display row), falling back to the first if none qualify.
+            var probed = children
+                .Select(id =>
+                {
+                    var link = SetupApi.GetSymbolicLink(HidInterfaceGuid, id) ?? HidApi.ToDevicePath(id);
+                    return (Id: id, Link: link, Info: QueryHidDeviceInfo(id, link));
+                })
+                .ToList();
 
-            // Always keep devices we can't open (HidHide-blocked or pnputil-disabled) in the
-            // default view — they were shown before the toggle, they should stay shown after.
-            // Only apply the gaming filter to fully-accessible devices.
-            if (!showAllHid && !info.IsAccessDenied
-                && !IsGamingDevice(info.VendorId, info.ProductId, info.UsagePage, info.Usage))
+            int primaryIdx = -1;
+            for (int i = 0; i < probed.Count; i++)
+            {
+                var info = probed[i].Info;
+                if (IsGamingDevice(info.VendorId, info.ProductId, info.UsagePage, info.Usage)
+                    || info.IsAccessDenied)
+                {
+                    primaryIdx = i;
+                    break;
+                }
+            }
+            if (primaryIdx < 0) primaryIdx = 0;
+
+            var primary = probed[primaryIdx];
+
+            // Default view: only show groups whose primary is a gaming device (or blocked
+            // by HidHide so we can't tell — keep visible so toggling can recover them).
+            if (!showAllHid && !primary.Info.IsAccessDenied
+                && !IsGamingDevice(primary.Info.VendorId, primary.Info.ProductId,
+                                   primary.Info.UsagePage, primary.Info.Usage))
                 continue;
 
-            // Dedup: collapse MI_00 / MI_01 of the same physical device into one row.
-            var dedupeKey = GetDedupeKey(instanceId);
-            if (!seenKeys.Add(dedupeKey)) continue;
-
-            // Build friendly name: vendor + product string (HidHide's approach),
-            // fallback to DEVPKEY_Device_DeviceDesc when the device is inaccessible.
             var friendlyName = BuildFriendlyName(
-                info.Vendor, info.Product, GetDeviceDescription(instanceId));
+                primary.Info.Vendor, primary.Info.Product, GetDeviceDescription(primary.Id));
 
-            var vid    = info.VendorId.ToString("X4").ToUpperInvariant();
-            var pid    = info.ProductId.ToString("X4").ToUpperInvariant();
+            var vid    = primary.Info.VendorId.ToString("X4").ToUpperInvariant();
+            var pid    = primary.Info.ProductId.ToString("X4").ToUpperInvariant();
             var vidPid = $"{vid}_{pid}";
 
             vidPidCount.TryGetValue(vidPid, out int dupIdx);
             vidPidCount[vidPid] = dupIdx + 1;
 
-            // AlternativeInstanceId: the USB function node for pnputil path (MOZA workaround).
-            var miMatch  = MiRx.Match(instanceId);
+            var miMatch  = MiRx.Match(primary.Id);
             var usbKey   = miMatch.Success
                 ? $"{vid}_{pid}_{miMatch.Groups[1].Value.ToUpperInvariant()}"
                 : null;
             usbFunctions.TryGetValue(usbKey ?? "", out var altId);
 
-            // IsEnabled: reflects PnP state (ConfigManagerErrorCode=22 or ConfigFlags=1).
-            bool disabledByFlags = ReadConfigFlags(altId) == 1 || ReadConfigFlags(instanceId) == 1;
-            bool isEnabled       = !disabledByFlags && !IsPnpDisabled(instanceId);
+            // IsEnabled: any child blacklisted-by-ConfigFlags = whole group is off
+            bool disabledByFlags = ReadConfigFlags(altId) == 1
+                                || children.Any(c => ReadConfigFlags(c) == 1);
+            bool isEnabled       = !disabledByFlags && !IsPnpDisabled(primary.Id);
 
             results.Add(new HidDevice
             {
-                InstanceId            = instanceId,
+                InstanceId            = primary.Id,
                 VendorId              = vid,
                 ProductId             = pid,
                 FriendlyName          = friendlyName,
                 VendorLabel           = friendlyName,
                 IsEnabled             = isEnabled,
                 DuplicateIndex        = dupIdx,
-                DeviceInterfacePath   = symbolicLink,
-                AxisCount             = info.AxisCount,
-                ButtonCount           = info.ButtonCount,
+                DeviceInterfacePath   = primary.Link,
+                AxisCount             = primary.Info.AxisCount,
+                ButtonCount           = primary.Info.ButtonCount,
                 AlternativeInstanceId = altId ?? "",
+                ChildInstanceIds      = children,
             });
         }
 
@@ -435,41 +454,34 @@ public sealed class DeviceEnumerator
         return Encoding.Unicode.GetString(raw).TrimEnd('\0').Trim();
     }
 
-    // ── Deduplication (unchanged: walk up to USB composite root) ─────────────────
+    // ── Grouping: Windows ContainerId ────────────────────────────────────────────
+    //
+    // Mirrors HidHide's HID.cpp BaseContainerId(). Every devnode belonging to one
+    // physical device is tagged with the same ContainerId GUID. Returns the GUID
+    // as a stable string key, or null when the device has no ContainerId or it's
+    // GUID_NULL (standalone device — caller should fall back to instance ID).
 
-    private static string GetDedupeKey(string instanceId)
+    private static readonly Guid GUID_NULL = Guid.Empty;
+
+    private static string? GetContainerId(string instanceId)
     {
         try
         {
-            if (CM_Locate_DevNodeW(out uint node, instanceId, 0) != CR_SUCCESS) goto fallback;
+            if (CM_Locate_DevNodeW(out uint node, instanceId, CM_LOCATE_DEVNODE_PHANTOM) != CR_SUCCESS)
+                return null;
 
-            for (int depth = 0; depth < 6; depth++)
-            {
-                if (CM_Get_Parent(out uint parent, node, 0) != CR_SUCCESS) break;
-                if (CM_Get_Device_ID_Size(out uint size, parent, 0) != CR_SUCCESS) break;
+            var key = DEVPKEY_Device_ContainerId;
+            uint type = 0, size = 16; // sizeof(GUID)
+            var raw = new byte[16];
+            if (CM_Get_DevNode_PropertyW(node, ref key, out type, raw, ref size, 0) != CR_SUCCESS)
+                return null;
+            if (type != DEVPROP_TYPE_GUID || size != 16) return null;
 
-                var sb = new StringBuilder((int)(size + 1));
-                if (CM_Get_Device_IDW(parent, sb, size + 1, 0) != CR_SUCCESS) break;
-                var parentId = sb.ToString();
-
-                if (VidRx.IsMatch(parentId) && PidRx.IsMatch(parentId) &&
-                    !parentId.Contains("&MI_", StringComparison.OrdinalIgnoreCase) &&
-                    !parentId.Contains("&Col", StringComparison.OrdinalIgnoreCase))
-                    return parentId;
-
-                node = parent;
-            }
+            var guid = new Guid(raw);
+            if (guid == GUID_NULL) return null;
+            return guid.ToString("B").ToUpperInvariant();
         }
-        catch { }
-
-        fallback:
-        var slash = instanceId.LastIndexOf('\\');
-        if (slash < 0) return instanceId;
-        var hwPath   = InterfaceTagRx.Replace(instanceId[..slash], "");
-        var instance = instanceId[(slash + 1)..];
-        var lastAmp  = instance.LastIndexOf('&');
-        if (lastAmp > 0) instance = instance[..lastAmp];
-        return $"{hwPath}\\{instance}";
+        catch { return null; }
     }
 
     // ── PnP enabled state (unchanged) ────────────────────────────────────────────

@@ -145,16 +145,17 @@ public sealed class LaunchOrchestrator : IDisposable
             return;
         }
 
-        // Hide ALL gaming devices except those explicitly kept visible.
-        // Unassigned devices, Reveal-After-Start, and Always-Hidden are all hidden.
-        var keepIds = profile.KeepEnabled
-            .Select(d => d.InstanceId)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
+        // Profile references store a single instance ID per DeviceRef. Expand to all
+        // sibling interfaces of the same physical device — composite controllers with
+        // multiple HID interfaces (MI_00 + MI_01 etc) need every child explicitly
+        // hidden, since HidHide's kernel filter does direct string compare.
         var allDevices = _enumerator.GetAll(showAllHid: false);
-        var toHide     = allDevices
+
+        var keepIds = ExpandToChildren(profile.KeepEnabled.Select(d => d.InstanceId), allDevices);
+
+        var toHide = allDevices
             .Where(d => !keepIds.Contains(d.InstanceId))
-            .Select(d => d.InstanceId)
+            .SelectMany(d => d.ChildInstanceIds.Count > 0 ? d.ChildInstanceIds : [d.InstanceId])
             .ToList();
 
         if (toHide.Count == 0)
@@ -169,8 +170,30 @@ public sealed class LaunchOrchestrator : IDisposable
         Log($"Hiding {toHide.Count} device(s) (all except {keepIds.Count} always-visible)...");
         _hidHide.BeginGameSession(toHide, keepIds, profile.GameExecutablePath);
 
-        foreach (var d in allDevices.Where(d => toHide.Contains(d.InstanceId)))
+        foreach (var d in allDevices.Where(d => !keepIds.Contains(d.InstanceId)))
             Logger.WriteVerbose($"[Orchestrator]   Hidden: {d.FriendlyName}");
+    }
+
+    // Given a set of "primary" instance IDs (as stored in the profile), expand to the
+    // full set of sibling interface IDs for each matching device. IDs that don't match
+    // any current device are passed through unchanged (so profiles with stale IDs still
+    // get applied even when ProfileHealer hasn't run).
+    private static HashSet<string> ExpandToChildren(
+        IEnumerable<string> primaryIds, List<HidDevice> allDevices)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var primary in primaryIds)
+        {
+            var match = allDevices.FirstOrDefault(d =>
+                d.InstanceId.Equals(primary, StringComparison.OrdinalIgnoreCase) ||
+                d.ChildInstanceIds.Contains(primary, StringComparer.OrdinalIgnoreCase));
+
+            if (match is not null && match.ChildInstanceIds.Count > 0)
+                foreach (var child in match.ChildInstanceIds) result.Add(child);
+            else
+                result.Add(primary);
+        }
+        return result;
     }
 
     // ── Phase 2: launch ──────────────────────────────────────────────────────────
@@ -221,6 +244,10 @@ public sealed class LaunchOrchestrator : IDisposable
         State = OrchestratorState.RestoringDevices;
         Log($"Revealing {profile.DisableThenRestore.Count} device(s) in order...");
 
+        // Re-enumerate so we can expand each DeviceRef.InstanceId to all of its
+        // sibling HID interfaces — composite devices need every MI_NN child revealed.
+        var allDevices = _enumerator.GetAll(showAllHid: false);
+
         var revealed   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var phaseStart = DateTime.UtcNow;
         var lastRevealAtS = 0; // seconds since phaseStart of the most recent reveal
@@ -242,7 +269,8 @@ public sealed class LaunchOrchestrator : IDisposable
             }
 
             Log($"  Revealing: {dev.FriendlyName}  (T+{targetAtS}s)");
-            revealed.Add(dev.InstanceId);
+            foreach (var id in ExpandToChildren([dev.InstanceId], allDevices))
+                revealed.Add(id);
             lastRevealAtS = targetAtS;
 
             // Remaining = everything that was hidden at session start, minus what's revealed so far.

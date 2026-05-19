@@ -28,14 +28,27 @@ public static class SteamWrapInvocation
 
         if (hidHide.IsAvailable)
         {
-            var keepIds = profile.KeepEnabled
+            var allDevices    = new DeviceEnumerator().GetAll(showAllHid: false);
+            var keepPrimaries = profile.KeepEnabled
                 .Select(d => d.InstanceId)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            var toHide = new DeviceEnumerator()
-                .GetAll(showAllHid: false)
-                .Where(d => !keepIds.Contains(d.InstanceId))
-                .Select(d => d.InstanceId)
+            // Expand both sets to include every sibling HID interface — composite
+            // devices need every child either kept visible or explicitly hidden,
+            // since HidHide's kernel filter does direct string compare.
+            var keepIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var d in allDevices)
+            {
+                if (!keepPrimaries.Contains(d.InstanceId)) continue;
+                if (d.ChildInstanceIds.Count > 0)
+                    foreach (var c in d.ChildInstanceIds) keepIds.Add(c);
+                else
+                    keepIds.Add(d.InstanceId);
+            }
+
+            var toHide = allDevices
+                .Where(d => !keepPrimaries.Contains(d.InstanceId))
+                .SelectMany(d => d.ChildInstanceIds.Count > 0 ? d.ChildInstanceIds : [d.InstanceId])
                 .ToList();
 
             if (toHide.Count > 0)

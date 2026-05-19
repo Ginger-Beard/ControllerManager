@@ -174,14 +174,25 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
             ? $"Hiding {device.FriendlyName}..."
             : $"Showing {device.FriendlyName}...";
 
+        // Apply to every HID child interface that shares the same physical device.
+        // Composite devices (e.g. wheel + button box on one USB controller) need
+        // each MI_NN interface explicitly blacklisted — HidHide's kernel filter
+        // does direct string compare with no ancestor traversal.
+        var ids = device.ChildInstanceIds.Count > 0
+            ? device.ChildInstanceIds
+            : [device.InstanceId];
+
         Task.Run(() =>
         {
             try
             {
-                if (device.IsEnabled)
-                    _hidHide.AddToPersistentBlacklist(device.InstanceId);
-                else
-                    _hidHide.RemoveFromPersistentBlacklist(device.InstanceId);
+                foreach (var id in ids)
+                {
+                    if (device.IsEnabled)
+                        _hidHide.AddToPersistentBlacklist(id);
+                    else
+                        _hidHide.RemoveFromPersistentBlacklist(id);
+                }
 
                 Application.Current.Dispatcher.Invoke(Refresh);
             }

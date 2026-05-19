@@ -86,16 +86,6 @@ always writes v2.
 
 ## Open work
 
-### Composite HID device handling
-Devices tab rows can dedupe multiple HID interfaces (MI_00 + MI_01) into one display
-row, but `DevicesViewModel.ToggleEnabled` only blacklists the primary `InstanceId`
-when toggled off. Child interfaces stay accessible to all processes → device only
-partially hidden. Fix: `HidDevice` should track the full set of related interface
-instance IDs (currently we have `AlternativeInstanceId` as a single slot from the
-pnputil era — not enough); `ToggleEnabled` adds all of them to / removes all from
-the BL. Not blocking sim racing (most game controllers expose one interface) — defer
-until a real device hits it.
-
 ### UAC-free Steam / shortcut launch
 `ControllerManager.exe` is `requireAdministrator`. Steam and `.lnk` shortcuts that
 target it trigger a UAC prompt on every launch — even when CM is already running in
