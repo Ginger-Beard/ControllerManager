@@ -223,7 +223,9 @@ static class Program
     static DeviceState ProbeState(string? path)
     {
         if (string.IsNullOrEmpty(path)) return DeviceState.Disabled;
-        using var h = CreateFile(path, 0, FILE_SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+        // Use GENERIC_READ — zero-access opens may bypass WDF filter driver callbacks
+        // and never reach HidHide's OnDeviceFileCreate, making hidden devices appear open.
+        using var h = CreateFile(path, GENERIC_READ, FILE_SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
         if (!h.IsInvalid) return DeviceState.Open;
         return Marshal.GetLastWin32Error() == ERROR_ACCESS_DENIED ? DeviceState.Hidden : DeviceState.Disabled;
     }
