@@ -53,6 +53,9 @@ public class DeviceRef
 
     [JsonPropertyName("friendlyName")]
     public string FriendlyName { get; set; } = "";
+
+    [JsonPropertyName("delaySeconds")]
+    public int DelaySeconds { get; set; } = 0;
 }
 
 public enum TriggerMode { HandleWatcher, Timer }

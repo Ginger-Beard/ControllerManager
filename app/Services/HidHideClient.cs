@@ -58,6 +58,11 @@ public sealed class HidHideClient
 
     public bool IsAvailable { get; }
 
+    // In-memory mirror of the session blacklist (no IOCTL_GET_SESSION_BLACKLIST exists).
+    // Updated on every Add/Update/Clear so callers can query it without extra IOCTL calls.
+    private readonly HashSet<string> _sessionIds = new(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlySet<string> SessionBlacklistIds => _sessionIds;
+
     private bool   _sessionActive;
     private string? _sessionGameNtPath;
     private bool   _sessionUsedInverse;
@@ -84,11 +89,13 @@ public sealed class HidHideClient
     public void AddSessionBlacklist(IEnumerable<string> instanceIds)
     {
         if (!IsAvailable) return;
-        var buf = EncodeMultiString(instanceIds);
-        if (buf.Length <= 2) return; // empty list = just double-null, nothing to add
+        var ids = instanceIds.ToList();
+        var buf = EncodeMultiString(ids);
+        if (buf.Length <= 2) return;
         using var h = OpenDevice();
         if (h.IsInvalid) return;
         DeviceIoControl(h, IOCTL_ADD_SESSION_BLACKLIST, buf, (uint)buf.Length, null, 0, out _, IntPtr.Zero);
+        foreach (var id in ids) _sessionIds.Add(id);
     }
 
     public void ClearSessionBlacklist()
@@ -97,6 +104,7 @@ public sealed class HidHideClient
         using var h = OpenDevice();
         if (h.IsInvalid) return;
         DeviceIoControl(h, IOCTL_CLR_SESSION_BLACKLIST, null, 0, null, 0, out _, IntPtr.Zero);
+        _sessionIds.Clear();
     }
 
     // ── Game session management ───────────────────────────────────────────────────
@@ -142,10 +150,10 @@ public sealed class HidHideClient
     public void UpdateSessionBlacklist(IEnumerable<string> remainingInstanceIds)
     {
         if (!IsAvailable || !_sessionActive) return;
-        ClearSessionBlacklist();
+        ClearSessionBlacklist();      // clears _sessionIds too
         var remaining = remainingInstanceIds.ToList();
         if (remaining.Count > 0)
-            AddSessionBlacklist(remaining);
+            AddSessionBlacklist(remaining);   // repopulates _sessionIds
         Logger.WriteVerbose($"[HidHide] Session blacklist updated — {remaining.Count} device(s) remaining");
     }
 

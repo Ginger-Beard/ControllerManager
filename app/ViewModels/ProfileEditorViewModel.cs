@@ -12,12 +12,10 @@ public sealed class ProfileEditorViewModel : ViewModelBase
     private string _exeName      = "";
     private TriggerMode _trigger = TriggerMode.HandleWatcher;
     private int    _timerSeconds = 30;
+    private int    _handleWatcherStepTimeoutMs = 1500;
     private bool   _isDirty;
 
     private HidDevice? _selectedAvailable;
-    private DeviceRef? _selectedKeep;
-    private DeviceRef? _selectedDisable;
-    private DeviceRef? _selectedKeepDisabled;
 
     public Guid? ProfileId { get; private set; }
 
@@ -91,11 +89,10 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         });
     }
 
-    public ObservableCollection<DeviceRef> KeepEnabled       { get; } = [];
-    public ObservableCollection<DeviceRef> DisableThenRestore { get; } = [];
-    public ObservableCollection<DeviceRef> KeepDisabled       { get; } = [];
+    // Single ordered list of device assignments — replaces three separate lists
+    public ObservableCollection<DeviceAssignmentViewModel> Assignments { get; } = [];
 
-    // Devices not yet assigned to any list — shown in the picker
+    // Devices not yet assigned — shown in the picker
     public IEnumerable<HidDevice> UnassignedDevices =>
         (_showAllHid ? _allDevicesExpanded : (IEnumerable<HidDevice>)AllDevices)
             .Where(d => !IsAssigned(d));
@@ -105,30 +102,11 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         get => _selectedAvailable;
         set => Set(ref _selectedAvailable, value);
     }
-    public DeviceRef? SelectedKeep
-    {
-        get => _selectedKeep;
-        set => Set(ref _selectedKeep, value);
-    }
-    public DeviceRef? SelectedDisable
-    {
-        get => _selectedDisable;
-        set => Set(ref _selectedDisable, value);
-    }
-    public DeviceRef? SelectedKeepDisabled
-    {
-        get => _selectedKeepDisabled;
-        set => Set(ref _selectedKeepDisabled, value);
-    }
 
-    public ICommand AddToKeepCommand          { get; }
-    public ICommand AddToDisableCommand       { get; }
-    public ICommand AddToKeepDisabledCommand  { get; }
-    public ICommand RemoveKeepCommand         { get; }
-    public ICommand RemoveDisableCommand      { get; }
-    public ICommand RemoveKeepDisabledCommand { get; }
-    public ICommand MoveDisableUpCommand      { get; }
-    public ICommand MoveDisableDownCommand    { get; }
+    public ICommand AddCommand      { get; }
+    public ICommand RemoveCommand   { get; }
+    public ICommand MoveUpCommand   { get; }
+    public ICommand MoveDownCommand { get; }
 
     public ProfileEditorViewModel(ObservableCollection<HidDevice> allDevices, DeviceEnumerator enumerator)
     {
@@ -138,72 +116,53 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         void RefreshUnassigned(object? s, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
             => OnPropertyChanged(nameof(UnassignedDevices));
 
-        AllDevices.CollectionChanged             += RefreshUnassigned;
-        _allDevicesExpanded.CollectionChanged    += RefreshUnassigned;
-        KeepEnabled.CollectionChanged            += RefreshUnassigned;
-        DisableThenRestore.CollectionChanged     += RefreshUnassigned;
-        KeepDisabled.CollectionChanged      += RefreshUnassigned;
+        AllDevices.CollectionChanged          += RefreshUnassigned;
+        _allDevicesExpanded.CollectionChanged += RefreshUnassigned;
+        Assignments.CollectionChanged         += RefreshUnassigned;
 
-        AddToKeepCommand = new RelayCommand(
-            _ => AddTo(SelectedAvailable, KeepEnabled),
+        AddCommand = new RelayCommand(
+            _ => AddSelected(),
             _ => SelectedAvailable is not null && !IsAssigned(SelectedAvailable));
 
-        AddToDisableCommand = new RelayCommand(
-            _ => AddTo(SelectedAvailable, DisableThenRestore),
-            _ => SelectedAvailable is not null && !IsAssigned(SelectedAvailable));
+        RemoveCommand = new RelayCommand(
+            p => { if (p is DeviceAssignmentViewModel a) RemoveAssignment(a); },
+            p => p is DeviceAssignmentViewModel);
 
-        AddToKeepDisabledCommand = new RelayCommand(
-            _ => AddTo(SelectedAvailable, KeepDisabled),
-            _ => SelectedAvailable is not null && !IsAssigned(SelectedAvailable));
+        MoveUpCommand = new RelayCommand(
+            p => { if (p is DeviceAssignmentViewModel a) MoveAssignment(a, -1); },
+            p => p is DeviceAssignmentViewModel a && Assignments.IndexOf(a) > 0);
 
-        RemoveKeepCommand = new RelayCommand(
-            _ => Remove(KeepEnabled, SelectedKeep),
-            _ => SelectedKeep is not null);
-
-        RemoveDisableCommand = new RelayCommand(
-            _ => Remove(DisableThenRestore, SelectedDisable),
-            _ => SelectedDisable is not null);
-
-        RemoveKeepDisabledCommand = new RelayCommand(
-            _ => Remove(KeepDisabled, SelectedKeepDisabled),
-            _ => SelectedKeepDisabled is not null);
-
-        MoveDisableUpCommand = new RelayCommand(
-            _ => MoveDisable(-1),
-            _ => SelectedDisable is not null && DisableThenRestore.IndexOf(SelectedDisable) > 0);
-
-        MoveDisableDownCommand = new RelayCommand(
-            _ => MoveDisable(+1),
-            _ => SelectedDisable is not null &&
-                 DisableThenRestore.IndexOf(SelectedDisable) < DisableThenRestore.Count - 1);
+        MoveDownCommand = new RelayCommand(
+            p => { if (p is DeviceAssignmentViewModel a) MoveAssignment(a, +1); },
+            p => p is DeviceAssignmentViewModel a &&
+                 Assignments.IndexOf(a) >= 0 &&
+                 Assignments.IndexOf(a) < Assignments.Count - 1);
     }
 
     private bool IsAssigned(HidDevice d) =>
-        KeepEnabled.Any(r => r.InstanceId == d.InstanceId) ||
-        DisableThenRestore.Any(r => r.InstanceId == d.InstanceId) ||
-        KeepDisabled.Any(r => r.InstanceId == d.InstanceId);
+        Assignments.Any(a => a.InstanceId == d.InstanceId);
 
-    private void AddTo(HidDevice? device, ObservableCollection<DeviceRef> list)
+    private void AddSelected()
     {
+        var device = SelectedAvailable;
         if (device is null || IsAssigned(device)) return;
-        list.Add(new DeviceRef { InstanceId = device.InstanceId, FriendlyName = device.FriendlyName });
+        Assignments.Add(new DeviceAssignmentViewModel(
+            device.InstanceId, device.FriendlyName, DeviceRole.AlwaysVisible));
         IsDirty = true;
     }
 
-    private void Remove(ObservableCollection<DeviceRef> list, DeviceRef? item)
+    private void RemoveAssignment(DeviceAssignmentViewModel item)
     {
-        if (item is null) return;
-        list.Remove(item);
+        Assignments.Remove(item);
         IsDirty = true;
     }
 
-    private void MoveDisable(int delta)
+    private void MoveAssignment(DeviceAssignmentViewModel item, int delta)
     {
-        if (SelectedDisable is null) return;
-        int idx = DisableThenRestore.IndexOf(SelectedDisable);
+        int idx = Assignments.IndexOf(item);
         int to  = idx + delta;
-        if (to < 0 || to >= DisableThenRestore.Count) return;
-        DisableThenRestore.Move(idx, to);
+        if (idx < 0 || to < 0 || to >= Assignments.Count) return;
+        Assignments.Move(idx, to);
         IsDirty = true;
     }
 
@@ -215,10 +174,18 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         _exeName     = p.GameExecutableName;
         _trigger     = p.TriggerMode;
         _timerSeconds = p.TimerSeconds;
+        _handleWatcherStepTimeoutMs = p.HandleWatcherStepTimeoutMs;
 
-        KeepEnabled.Clear();        foreach (var d in p.KeepEnabled)       KeepEnabled.Add(d);
-        DisableThenRestore.Clear(); foreach (var d in p.DisableThenRestore) DisableThenRestore.Add(d);
-        KeepDisabled.Clear();       foreach (var d in p.KeepDisabled)       KeepDisabled.Add(d);
+        Assignments.Clear();
+        foreach (var d in p.KeepEnabled)
+            Assignments.Add(new DeviceAssignmentViewModel(
+                d.InstanceId, d.FriendlyName, DeviceRole.AlwaysVisible));
+        foreach (var d in p.DisableThenRestore)
+            Assignments.Add(new DeviceAssignmentViewModel(
+                d.InstanceId, d.FriendlyName, DeviceRole.RevealAfterStart, d.DelaySeconds));
+        foreach (var d in p.KeepDisabled)
+            Assignments.Add(new DeviceAssignmentViewModel(
+                d.InstanceId, d.FriendlyName, DeviceRole.AlwaysHidden));
 
         IsDirty = false;
         OnPropertyChanged(nameof(Name));
@@ -228,16 +195,46 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         OnPropertyChanged(nameof(TimerSeconds));
     }
 
-    public Profile ToProfile() => new()
+    public Profile ToProfile()
     {
-        Id                 = ProfileId ?? Guid.NewGuid(),
-        Name               = _name,
-        GameExecutablePath = _exePath,
-        GameExecutableName = _exeName,
-        TriggerMode        = _trigger,
-        TimerSeconds       = _timerSeconds,
-        KeepEnabled        = [.. KeepEnabled],
-        DisableThenRestore = [.. DisableThenRestore],
-        KeepDisabled       = [.. KeepDisabled],
-    };
+        var keepEnabled        = new List<DeviceRef>();
+        var disableThenRestore = new List<DeviceRef>();
+        var keepDisabled       = new List<DeviceRef>();
+
+        foreach (var a in Assignments)
+        {
+            var dref = new DeviceRef
+            {
+                InstanceId   = a.InstanceId,
+                FriendlyName = a.FriendlyName,
+            };
+            switch (a.Role)
+            {
+                case DeviceRole.AlwaysVisible:
+                    keepEnabled.Add(dref);
+                    break;
+                case DeviceRole.RevealAfterStart:
+                    dref.DelaySeconds = a.DelaySeconds;
+                    disableThenRestore.Add(dref);
+                    break;
+                case DeviceRole.AlwaysHidden:
+                    keepDisabled.Add(dref);
+                    break;
+            }
+        }
+
+        return new Profile
+        {
+            Id                         = ProfileId ?? Guid.NewGuid(),
+            Name                       = _name,
+            GameExecutablePath         = _exePath,
+            GameExecutableName         = _exeName,
+            TriggerMode                = _trigger,
+            TimerSeconds               = _timerSeconds,
+            HandleWatcherStepTimeoutMs = _handleWatcherStepTimeoutMs,
+            KeepEnabled                = keepEnabled,
+            DisableThenRestore         = disableThenRestore,
+            KeepDisabled               = keepDisabled,
+        };
+    }
 }

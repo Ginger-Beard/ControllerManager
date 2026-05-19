@@ -19,7 +19,7 @@ public sealed class MainViewModel : ViewModelBase
 
         Devices   = new DevicesViewModel(new DeviceEnumerator(), App.HidHide);
         Games     = new GamesViewModel(App.ProfileStore, Devices);
-        Dashboard = new DashboardViewModel(orchestrator, App.ProfileStore);
+        Dashboard = new DashboardViewModel(orchestrator, App.ProfileStore, Devices.Devices);
         Settings  = new SettingsViewModel(App.SettingsStore);
 
         orchestrator.StateChanged += (_, state) =>

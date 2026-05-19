@@ -49,8 +49,6 @@ public sealed class GamesViewModel : ViewModelBase
                     }
 
                     Editor.LoadProfile(value);
-                    if (!string.IsNullOrEmpty(value.GameExecutableName))
-                        HandleWatcher.ProcessName = value.GameExecutableName;
                 }
             }
         }
@@ -63,7 +61,6 @@ public sealed class GamesViewModel : ViewModelBase
     }
 
     public ProfileEditorViewModel  Editor        { get; }
-    public HandleWatcherViewModel  HandleWatcher { get; }
 
     public ICommand NewProfileCommand              { get; }
     public ICommand DeleteProfileCommand           { get; }
@@ -81,7 +78,6 @@ public sealed class GamesViewModel : ViewModelBase
         _devices  = devices;
         _profiles = store.Load();
         Editor        = new ProfileEditorViewModel(devices.Devices, devices.Enumerator);
-        HandleWatcher = new HandleWatcherViewModel(devices.Devices);
 
         foreach (var p in _profiles) Profiles.Add(p);
 

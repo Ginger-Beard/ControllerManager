@@ -26,6 +26,9 @@ public sealed class LaunchOrchestrator : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _flowTask;
 
+    /// <summary>The profile currently running; null when idle.</summary>
+    public Profile? ActiveProfile { get; private set; }
+
     public OrchestratorState State
     {
         get => _state;
@@ -76,6 +79,7 @@ public sealed class LaunchOrchestrator : IDisposable
 
     private async Task RunFlow(Profile profile, CancellationToken ct)
     {
+        ActiveProfile = profile;
         Logger.Write($"[Orchestrator] RunFlow — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.TriggerMode}");
         try
         {
@@ -110,6 +114,7 @@ public sealed class LaunchOrchestrator : IDisposable
         finally
         {
             _watcher.Stop();
+            ActiveProfile = null;
             State = OrchestratorState.Idle;
         }
     }
@@ -238,6 +243,9 @@ public sealed class LaunchOrchestrator : IDisposable
                     await Task.Delay(profile.HandleWatcherStepTimeoutMs, ct);
                 }
             }
+
+            if (dev.DelaySeconds > 0)
+                await Task.Delay(dev.DelaySeconds * 1000, ct);
         }
 
         Log("All Disable→Restore devices revealed.");

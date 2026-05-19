@@ -59,37 +59,71 @@
                         </Grid>
                     </Border>
 
-                    <!-- Device summary -->
+                    <!-- Device visibility columns -->
                     <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="90"/>
                         </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Column="0" Grid.Row="0" Text="Keep Enabled"
-                                   FontWeight="SemiBold" Foreground="#3CB371" Margin="0,0,4,2"/>
-                        <TextBlock Grid.Column="1" Grid.Row="0" Text="Disable → Re-enable"
-                                   FontWeight="SemiBold" Foreground="#E07040" Margin="4,0,4,2"/>
-                        <TextBlock Grid.Column="2" Grid.Row="0" Text="Keep Disabled"
-                                   FontWeight="SemiBold" Foreground="#888" Margin="4,0,0,2"/>
+                        <!-- Column headers -->
+                        <TextBlock Grid.Column="0" Grid.Row="0"
+                                   Text="System" FontWeight="SemiBold" Foreground="#3CB371"
+                                   Margin="0,0,4,1"
+                                   ToolTip="Devices accessible to all processes (not in persistent hidden list)"/>
+                        <TextBlock Grid.Column="1" Grid.Row="0"
+                                   FontWeight="SemiBold" Margin="4,0,0,1">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Text" Value="Game"/>
+                                    <Setter Property="Foreground" Value="#3CB371"/>
+                                    <Setter Property="ToolTip"
+                                            Value="Devices accessible to the active game process"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsSessionActive}" Value="False">
+                                            <Setter Property="Text" Value="Game"/>
+                                            <Setter Property="Foreground" Value="#AAAAAA"/>
+                                            <Setter Property="ToolTip"
+                                                    Value="Shown when a game session is active"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
 
-                        <ListBox Grid.Column="0" Grid.Row="1" Margin="0,0,4,0"
-                                 ItemsSource="{Binding KeepEnabled}"
-                                 DisplayMemberPath="FriendlyName"
+                        <!-- Session status line — spans both columns, only visible during a session -->
+                        <TextBlock Grid.Column="0" Grid.ColumnSpan="2" Grid.Row="1"
+                                   Text="{Binding SessionText}"
+                                   FontStyle="Italic" Foreground="#3CB371" FontSize="11"
+                                   Margin="0,0,0,4"
+                                   Visibility="{Binding IsSessionActive,
+                                       Converter={StaticResource BoolVisConverter}}"/>
+
+                        <!-- System devices list -->
+                        <ListBox Grid.Column="0" Grid.Row="2" Margin="0,0,4,0"
+                                 ItemsSource="{Binding SystemDevices}"
                                  BorderThickness="1" BorderBrush="#CCC" FontSize="11"/>
-                        <ListBox Grid.Column="1" Grid.Row="1" Margin="4,0,4,0"
-                                 ItemsSource="{Binding DisableThenRestore}"
-                                 DisplayMemberPath="FriendlyName"
-                                 BorderThickness="1" BorderBrush="#CCC" FontSize="11"/>
-                        <ListBox Grid.Column="2" Grid.Row="1" Margin="4,0,0,0"
-                                 ItemsSource="{Binding KeepDisabled}"
-                                 DisplayMemberPath="FriendlyName"
-                                 BorderThickness="1" BorderBrush="#CCC" FontSize="11"/>
+
+                        <!-- Game devices list -->
+                        <ListBox Grid.Column="1" Grid.Row="2" Margin="4,0,0,0"
+                                 ItemsSource="{Binding GameDevices}"
+                                 BorderThickness="1" BorderBrush="#CCC" FontSize="11">
+                            <ListBox.Style>
+                                <Style TargetType="ListBox">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsSessionActive}" Value="False">
+                                            <Setter Property="Background" Value="#F8F8F8"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ListBox.Style>
+                        </ListBox>
+
                     </Grid>
 
                     <!-- Activity log -->
@@ -118,6 +152,16 @@
             <TabItem Header="Devices" DataContext="{Binding Devices}">
                 <DockPanel Margin="8">
 
+                    <!-- Purpose banner -->
+                    <Border DockPanel.Dock="Top"
+                            Background="#FFF8E7" BorderBrush="#E8D8A0" BorderThickness="1"
+                            CornerRadius="3" Padding="8,5" Margin="0,0,0,8">
+                        <TextBlock TextWrapping="Wrap" Foreground="#7A6020" FontSize="11">
+                            Devices turned off here are hidden from your entire computer.
+                            To hide devices only while a specific game runs, use the Games tab.
+                        </TextBlock>
+                    </Border>
+
                     <!-- Toolbar -->
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                         <CheckBox DockPanel.Dock="Right"
@@ -133,23 +177,6 @@
                                 Command="{Binding RefreshCommand}"
                                 DockPanel.Dock="Right"
                                 Padding="12,4" Margin="4,0,0,0"/>
-                        <!-- HidHide global active toggle — only shown when HidHide backend is in use -->
-                        <CheckBox DockPanel.Dock="Right"
-                                  Content="Hiding active"
-                                  IsChecked="{Binding HidHideActive}"
-                                  VerticalAlignment="Center"
-                                  Margin="12,0,0,0"
-                                  ToolTip="Master switch: when off, HidHide filter is bypassed and all processes see all devices">
-                            <CheckBox.Style>
-                                <Style TargetType="CheckBox">
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsHidHideBackend}" Value="False">
-                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </CheckBox.Style>
-                        </CheckBox>
                         <TextBlock Text="{Binding StatusText}"
                                    VerticalAlignment="Center"
                                    Foreground="Gray"/>
@@ -276,18 +303,12 @@
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
 
-                                <!-- Friendly name -->
-                                <GridViewColumn Header="Device" Width="320"
-                                                DisplayMemberBinding="{Binding FriendlyName}"/>
-
-                                <!-- VID:PID badge -->
-                                <GridViewColumn Header="VID:PID" Width="90">
+                                <!-- Friendly name — VID:PID in tooltip, instance ID via context menu -->
+                                <GridViewColumn Header="Device" Width="450">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
-                                            <TextBlock Text="{Binding VidPidShort}"
-                                                       FontFamily="Consolas"
-                                                       FontSize="11"
-                                                       Foreground="#555"/>
+                                            <TextBlock Text="{Binding FriendlyName}"
+                                                       ToolTip="{Binding VidPidShort}"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
@@ -326,28 +347,6 @@
                                                     </Style>
                                                 </Button.Style>
                                             </Button>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-
-                                <!-- Instance ID (click to copy) -->
-                                <GridViewColumn Header="Instance ID" Width="240">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding InstanceId}"
-                                                       FontFamily="Consolas"
-                                                       FontSize="10"
-                                                       Foreground="#777"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       ToolTip="{Binding InstanceId}"
-                                                       Cursor="Hand">
-                                                <TextBlock.InputBindings>
-                                                    <MouseBinding MouseAction="LeftClick"
-                                                                  Command="{Binding DataContext.CopyInstanceIdCommand,
-                                                                            RelativeSource={RelativeSource AncestorType=ListView}}"
-                                                                  CommandParameter="{Binding}"/>
-                                                </TextBlock.InputBindings>
-                                            </TextBlock>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
