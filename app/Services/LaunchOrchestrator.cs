@@ -273,8 +273,6 @@ public sealed class LaunchOrchestrator : IDisposable
         }
 
         Log($"{procName}.exe exited.");
-        _hidHide.EndGameSession();
-        Log("Session ended — devices restored.");
     }
 
     // ── HandleWatcher helpers ────────────────────────────────────────────────────

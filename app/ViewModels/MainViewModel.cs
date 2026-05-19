@@ -15,6 +15,7 @@ public sealed class MainViewModel : ViewModelBase
     public MainViewModel()
     {
         var orchestrator   = new LaunchOrchestrator(App.HidHide);
+        orchestrator.ActivityLogged += (_, msg) => Logger.Write(msg);
         var processWatcher = new ProcessWatcher(App.ProfileStore, orchestrator);
 
         Devices   = new DevicesViewModel(new DeviceEnumerator(), App.HidHide);
