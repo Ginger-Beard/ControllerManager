@@ -243,10 +243,32 @@ game takes to launch) + configurable spacing between reveals for devices that ne
 The existing profile-level `TimerSeconds` / `TriggerMode` becomes the fallback for users
 who don't want HandleWatcher at all (e.g. headless Steam wrapper where no UI is open).
 
-**Still needs testing:** Confirm HandleWatcher correctly fires for always-visible devices
-under HidHide inverse whitelist mode. Should work since those devices are fully accessible
-to the game and the NtQueryInformationProcess monitoring is process-level, not dependent
-on the hiding mechanism. But worth verifying with FH6 + MOZA before relying on it.
+**FH6 + MOZA analysis (untested but well-reasoned):**
+
+*Hiding (FFB fix):* Guaranteed. HidHide hooks `PsSetLoadImageNotifyRoutine` so the filter
+is active before any game code runs — before the ~30ms DirectInput calibration burst.
+No race window. Strictly better than pnputil here.
+
+*HandleWatcher trigger:* Should still fire. The MOZA wheel (VID 0x0EB7) is KeepEnabled —
+not in the session blacklist — so FH6 can access it normally. HandleWatcher watches
+NtQueryInformationProcess for `\REGISTRY\...\DirectInput\VID_0EB7*` paths. Those handles
+open regardless of HidHide. The acquisition signal fires.
+
+*Pedal reveal:* The uncertain part, but probably fine for FH6 specifically. With pnputil,
+re-enabling sent `WM_DEVICECHANGE / DBT_DEVICEARRIVAL` which caused DirectInput to rescan.
+HidHide removing a device from the session blacklist sends no arrival event, so a game
+doing a one-shot DirectInput-only scan at startup would miss the newly-visible pedals.
+However — the TODO records that FH6 opens *both* `\REGISTRY\...\DirectInput\VID_*` handles
+(one-shot DInput calibration burst) AND `\Device\HID*` handles (RawInput/WGI). FH6 is
+an Xbox Play Anywhere title that uses WGI for live input polling, and WGI is designed
+for hot-plug — it continuously tracks device state. When pedals are removed from the
+session blacklist, WGI will see them without needing an arrival notification.
+
+*Summary:* FFB assignment is guaranteed. Pedal reveal should work because FH6 uses WGI
+for active input, not a legacy one-shot DirectInput scan. The only failure mode is if FH6
+specifically maps pedal axes through DInput calibration data and ignores arrivals — which
+contradicts the `\Device\HID*` handle evidence. Worth confirming on first real test but
+not a blocker.
 
 ### Profile device list — redesign for HidHide / unified UI ⬅ NEXT PRIORITY
 The current three-list model (Keep Enabled / Disable→Re-enable / Keep Disabled) was
