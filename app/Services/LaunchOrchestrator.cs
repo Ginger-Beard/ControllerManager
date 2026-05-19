@@ -120,6 +120,9 @@ public sealed class LaunchOrchestrator : IDisposable
         finally
         {
             _watcher.Stop();
+            // Always clean up the HidHide session — even if the flow threw or was cancelled
+            // mid-way (e.g. game launch timeout). Prevents stale session blacklist state.
+            _hidHide.EndGameSession();
             ActiveProfile = null;
             State = OrchestratorState.Idle;
         }

@@ -122,17 +122,17 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
             {
                 var list = _enumerator.GetAll(_showAllHid);
 
-                // Overlay HidHide state: persistent blacklist + live session blacklist.
+                // Overlay the persistent HidHide blacklist only — the Devices tab
+                // controls persistent system-wide hiding, not session hiding.
+                // Session state is shown separately on the Dashboard.
                 bool activeState = false;
                 if (_hidHide.IsAvailable)
                 {
                     var persistent = _hidHide.GetBlacklist();
-                    var session    = _hidHide.SessionBlacklistIds;
                     activeState    = _hidHide.GetActive();
                     foreach (var d in list)
                     {
-                        if (persistent.Contains(d.InstanceId, StringComparer.OrdinalIgnoreCase)
-                            || session.Contains(d.InstanceId))
+                        if (persistent.Contains(d.InstanceId, StringComparer.OrdinalIgnoreCase))
                             d.IsEnabled = false;
                     }
                 }

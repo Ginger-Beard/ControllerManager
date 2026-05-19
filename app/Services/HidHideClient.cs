@@ -54,6 +54,27 @@ public sealed class HidHideClient
     private const uint OPEN_EXISTING  = 3;
     private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
 
+    // Broadcast a device-change notification so apps like joy.cpl re-enumerate immediately
+    // rather than showing stale state. HidHide hides at file-open level and sends no
+    // WM_DEVICECHANGE itself — we do it manually after persistent blacklist changes.
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd, uint Msg, UIntPtr wParam, IntPtr lParam,
+        uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+
+    private const int  HWND_BROADCAST       = unchecked((int)0xFFFF);
+    private const uint WM_DEVICECHANGE      = 0x0219;
+    private const uint DBT_DEVNODES_CHANGED = 0x0007;
+    private const uint SMTO_ABORTIFHUNG     = 0x0002;
+
+    private static void BroadcastDeviceChange()
+    {
+        try { SendMessageTimeout((IntPtr)HWND_BROADCAST, WM_DEVICECHANGE,
+                  (UIntPtr)DBT_DEVNODES_CHANGED, IntPtr.Zero,
+                  SMTO_ABORTIFHUNG, 1000, out _); }
+        catch { }
+    }
+
     // ── State ────────────────────────────────────────────────────────────────────
 
     public bool IsAvailable { get; }
@@ -225,6 +246,7 @@ public sealed class HidHideClient
         }
 
         if (!GetActive()) SetActive(true);
+        BroadcastDeviceChange();
         Logger.WriteVerbose($"[HidHide] Persistent blacklist add: {instanceId}");
     }
 
@@ -247,6 +269,7 @@ public sealed class HidHideClient
                 .ToList();
             SetWhitelist(wl);
         }
+        BroadcastDeviceChange();
         Logger.WriteVerbose($"[HidHide] Persistent blacklist remove: {instanceId}");
     }
 
