@@ -6,15 +6,8 @@ namespace ControllerManager.Cli;
 /// <summary>
 /// Handles --steam-wrap &lt;profileId&gt; -- &lt;game args...&gt;
 ///
-/// Usage in Steam Launch Options:
-///   "C:\path\ControllerManager.exe" --steam-wrap {profileId} -- %command%
-///
-/// Flow:
-///   1. Hide profile devices via HidHide (session blacklist — auto-cleans if we crash)
-///   2. Launch the real game command (args after --)
-///   3. Wait for the game process to exit
-///   4. Clear HidHide session
-///
+/// Hides ALL gaming devices except those in KeepEnabled (same as the orchestrator),
+/// launches the real game command, waits for exit, then restores.
 /// This process stays alive so Steam correctly tracks playtime.
 /// </summary>
 public static class SteamWrapInvocation
@@ -33,9 +26,21 @@ public static class SteamWrapInvocation
         var profile = profiles.Load().FirstOrDefault(p => p.Id == id);
         if (profile is null) return;
 
-        var toHide = profile.DisableThenRestore.Concat(profile.KeepDisabled).ToList();
-        if (toHide.Count > 0 && hidHide.IsAvailable)
-            hidHide.BeginGameSession(toHide.Select(d => d.InstanceId), gameExe);
+        if (hidHide.IsAvailable)
+        {
+            var keepIds = profile.KeepEnabled
+                .Select(d => d.InstanceId)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var toHide = new DeviceEnumerator()
+                .GetAll(showAllHid: false)
+                .Where(d => !keepIds.Contains(d.InstanceId))
+                .Select(d => d.InstanceId)
+                .ToList();
+
+            if (toHide.Count > 0)
+                hidHide.BeginGameSession(toHide, gameExe);
+        }
 
         using var proc = Process.Start(new ProcessStartInfo
         {
@@ -47,7 +52,7 @@ public static class SteamWrapInvocation
         if (proc is not null)
             await proc.WaitForExitAsync();
 
-        if (toHide.Count > 0 && hidHide.IsAvailable)
+        if (hidHide.IsAvailable)
             hidHide.EndGameSession();
     }
 }

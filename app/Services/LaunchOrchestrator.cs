@@ -19,12 +19,17 @@ public sealed class LaunchOrchestrator : IDisposable
     private static readonly Regex VidPidRx =
         new(@"VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private readonly HidHideClient _hidHide;
+    private readonly HidHideClient  _hidHide;
+    private readonly DeviceEnumerator _enumerator;
     private readonly HandleWatcher _watcher = new();
 
     private OrchestratorState _state = OrchestratorState.Idle;
     private CancellationTokenSource? _cts;
     private Task? _flowTask;
+
+    // Instance IDs added to the session blacklist at session start.
+    // Used to compute the correct "remaining hidden" set as devices are revealed.
+    private HashSet<string> _sessionHiddenIds = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The profile currently running; null when idle.</summary>
     public Profile? ActiveProfile { get; private set; }
@@ -40,9 +45,10 @@ public sealed class LaunchOrchestrator : IDisposable
     public event EventHandler<OrchestratorState>? StateChanged;
     public event EventHandler<string>?            ActivityLogged;
 
-    public LaunchOrchestrator(HidHideClient hidHide)
+    public LaunchOrchestrator(HidHideClient hidHide, DeviceEnumerator? enumerator = null)
     {
-        _hidHide = hidHide;
+        _hidHide    = hidHide;
+        _enumerator = enumerator ?? new DeviceEnumerator();
     }
 
     // ── Public API ───────────────────────────────────────────────────────────────
@@ -124,8 +130,6 @@ public sealed class LaunchOrchestrator : IDisposable
     private void HideDevices(Profile profile, CancellationToken ct)
     {
         State = OrchestratorState.HidingDevices;
-        var toHide = profile.DisableThenRestore.Concat(profile.KeepDisabled).ToList();
-        if (toHide.Count == 0) return;
 
         if (!_hidHide.IsAvailable)
         {
@@ -133,10 +137,32 @@ public sealed class LaunchOrchestrator : IDisposable
             return;
         }
 
-        Log($"Hiding {toHide.Count} device(s)...");
-        _hidHide.BeginGameSession(toHide.Select(d => d.InstanceId), profile.GameExecutablePath);
-        foreach (var dev in toHide)
-            Log($"  Hidden: {dev.FriendlyName}");
+        // Hide ALL gaming devices except those explicitly kept visible.
+        // Unassigned devices, Reveal-After-Start, and Always-Hidden are all hidden.
+        var keepIds = profile.KeepEnabled
+            .Select(d => d.InstanceId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var allDevices = _enumerator.GetAll(showAllHid: false);
+        var toHide     = allDevices
+            .Where(d => !keepIds.Contains(d.InstanceId))
+            .Select(d => d.InstanceId)
+            .ToList();
+
+        if (toHide.Count == 0)
+        {
+            Log("No devices to hide.");
+            _sessionHiddenIds.Clear();
+            return;
+        }
+
+        _sessionHiddenIds = new HashSet<string>(toHide, StringComparer.OrdinalIgnoreCase);
+
+        Log($"Hiding {toHide.Count} device(s) (all except {keepIds.Count} always-visible)...");
+        _hidHide.BeginGameSession(toHide, profile.GameExecutablePath);
+
+        foreach (var d in allDevices.Where(d => toHide.Contains(d.InstanceId)))
+            Logger.WriteVerbose($"[Orchestrator]   Hidden: {d.FriendlyName}");
     }
 
     // ── Phase 2: launch ──────────────────────────────────────────────────────────
@@ -179,20 +205,20 @@ public sealed class LaunchOrchestrator : IDisposable
     {
         State = OrchestratorState.WaitingForAcquisition;
 
-        if (profile.TriggerMode == TriggerMode.Timer)
-        {
-            Log($"Waiting {profile.TimerSeconds}s for game to acquire devices...");
-            await Task.Delay(profile.TimerSeconds * 1000, ct);
-            Log("Timer elapsed — revealing devices.");
-            return;
-        }
-
-        Log("Watching for game to acquire first device (HandleWatcher)...");
+        // Always watch for the game to open a handle to an always-visible device.
+        // Fall through after 120s if no signal arrives.
+        Log("Watching for game to acquire first device...");
         var ev = await WaitForAnyDeviceEvent(timeoutMs: 120_000, ct);
         if (ev is not null)
-            Log($"Acquisition signal: {ev.DevicePath}");
+            Log($"Acquisition signal received.");
         else
-            LogVerbose("Acquisition timeout — proceeding anyway.");
+            LogVerbose("No acquisition signal within 120s — proceeding anyway.");
+
+        if (profile.InitialDelaySeconds > 0)
+        {
+            Log($"Waiting {profile.InitialDelaySeconds}s before revealing devices...");
+            await Task.Delay(profile.InitialDelaySeconds * 1000, ct);
+        }
     }
 
     // ── Phase 4: reveal DisableThenRestore devices one by one ────────────────────
@@ -202,53 +228,29 @@ public sealed class LaunchOrchestrator : IDisposable
         State = OrchestratorState.RestoringDevices;
         Log($"Revealing {profile.DisableThenRestore.Count} device(s) in order...");
 
-        var revealed   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var keepHidden = profile.KeepDisabled.Select(d => d.InstanceId).ToList();
+        var revealed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var dev in profile.DisableThenRestore)
         {
             ct.ThrowIfCancellationRequested();
+            Log($"  Revealing: {dev.FriendlyName}");
+            revealed.Add(dev.InstanceId);
 
-            try
-            {
-                Log($"  Revealing: {dev.FriendlyName}");
-                revealed.Add(dev.InstanceId);
-
-                var remaining = profile.DisableThenRestore
-                    .Where(d => !revealed.Contains(d.InstanceId))
-                    .Select(d => d.InstanceId)
-                    .Concat(keepHidden)
-                    .ToList();
-                _hidHide.UpdateSessionBlacklist(remaining);
-            }
-            catch (Exception ex)
-            {
-                Log($"  Warning: {dev.FriendlyName} — {ex.Message}");
-                continue;
-            }
-
-            if (profile.TriggerMode == TriggerMode.HandleWatcher)
-            {
-                var (vid, pid) = ParseVidPid(dev.InstanceId);
-                if (vid is not null)
-                {
-                    var ev = await WaitForDeviceEvent(vid, pid!, profile.HandleWatcherStepTimeoutMs, ct);
-                    if (ev is not null)
-                        LogVerbose($"    Game acknowledged {dev.FriendlyName}");
-                    else
-                        LogVerbose($"    Timeout — advancing to next device");
-                }
-                else
-                {
-                    await Task.Delay(profile.HandleWatcherStepTimeoutMs, ct);
-                }
-            }
+            // Remaining = everything that was hidden at session start, minus what's revealed so far.
+            // This preserves unassigned and Always-Hidden devices as hidden throughout.
+            var remaining = _sessionHiddenIds
+                .Where(id => !revealed.Contains(id))
+                .ToList();
+            _hidHide.UpdateSessionBlacklist(remaining);
 
             if (dev.DelaySeconds > 0)
+            {
+                LogVerbose($"    Waiting {dev.DelaySeconds}s...");
                 await Task.Delay(dev.DelaySeconds * 1000, ct);
+            }
         }
 
-        Log("All Disable→Restore devices revealed.");
+        Log("All Reveal-After-Start devices revealed.");
     }
 
     // ── Phase 5: monitor until exit ──────────────────────────────────────────────

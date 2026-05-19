@@ -16,11 +16,19 @@ public class Profile
     [JsonPropertyName("gameExecutableName")]
     public string GameExecutableName { get; set; } = "";
 
+    // Kept for reading old profiles only — no longer written by the editor.
     [JsonPropertyName("triggerMode")]
     public TriggerMode TriggerMode { get; set; } = TriggerMode.HandleWatcher;
-
     [JsonPropertyName("timerSeconds")]
-    public int TimerSeconds { get; set; } = 30;
+    public int TimerSeconds { get; set; } = 0;
+
+    /// <summary>
+    /// Extra seconds to wait after HandleWatcher fires (or its 120s timeout elapses)
+    /// before beginning the sequential device reveal. 0 = start immediately.
+    /// On load, migrated from old TimerSeconds when TriggerMode was Timer.
+    /// </summary>
+    [JsonPropertyName("initialDelaySeconds")]
+    public int InitialDelaySeconds { get; set; } = 0;
 
     [JsonPropertyName("hotkeyBinding")]
     public string HotkeyBinding { get; set; } = "F9";

@@ -7,11 +7,10 @@ namespace ControllerManager.ViewModels;
 
 public sealed class ProfileEditorViewModel : ViewModelBase
 {
-    private string _name         = "";
-    private string _exePath      = "";
-    private string _exeName      = "";
-    private TriggerMode _trigger = TriggerMode.HandleWatcher;
-    private int    _timerSeconds = 30;
+    private string _name               = "";
+    private string _exePath            = "";
+    private string _exeName            = "";
+    private int    _initialDelaySeconds = 0;
     private int    _handleWatcherStepTimeoutMs = 1500;
     private bool   _isDirty;
 
@@ -37,16 +36,10 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         private set => Set(ref _exeName, value);
     }
 
-    public TriggerMode TriggerMode
+    public int InitialDelaySeconds
     {
-        get => _trigger;
-        set { Set(ref _trigger, value); IsDirty = true; }
-    }
-
-    public int TimerSeconds
-    {
-        get => _timerSeconds;
-        set { Set(ref _timerSeconds, Math.Clamp(value, 5, 300)); IsDirty = true; }
+        get => _initialDelaySeconds;
+        set { Set(ref _initialDelaySeconds, Math.Max(0, value)); IsDirty = true; }
     }
 
     public bool IsDirty
@@ -172,9 +165,12 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         _name        = p.Name;
         _exePath     = p.GameExecutablePath;
         _exeName     = p.GameExecutableName;
-        _trigger     = p.TriggerMode;
-        _timerSeconds = p.TimerSeconds;
         _handleWatcherStepTimeoutMs = p.HandleWatcherStepTimeoutMs;
+
+        // Migrate old Timer-mode profiles: if no initialDelaySeconds was saved but
+        // the profile used the Timer trigger, carry forward TimerSeconds as the delay.
+        _initialDelaySeconds = p.InitialDelaySeconds > 0 ? p.InitialDelaySeconds
+            : (p.TriggerMode == TriggerMode.Timer ? p.TimerSeconds : 0);
 
         Assignments.Clear();
         foreach (var d in p.KeepEnabled)
@@ -191,8 +187,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(ExePath));
         OnPropertyChanged(nameof(ExeName));
-        OnPropertyChanged(nameof(TriggerMode));
-        OnPropertyChanged(nameof(TimerSeconds));
+        OnPropertyChanged(nameof(InitialDelaySeconds));
     }
 
     public Profile ToProfile()
@@ -229,8 +224,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
             Name                       = _name,
             GameExecutablePath         = _exePath,
             GameExecutableName         = _exeName,
-            TriggerMode                = _trigger,
-            TimerSeconds               = _timerSeconds,
+            InitialDelaySeconds        = _initialDelaySeconds,
             HandleWatcherStepTimeoutMs = _handleWatcherStepTimeoutMs,
             KeepEnabled                = keepEnabled,
             DisableThenRestore         = disableThenRestore,
