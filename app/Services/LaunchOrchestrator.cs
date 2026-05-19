@@ -19,8 +19,11 @@ public sealed class LaunchOrchestrator : IDisposable
     private static readonly Regex VidPidRx =
         new(@"VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private readonly StateStore    _stateStore;
-    private readonly HandleWatcher _watcher = new();
+    private readonly StateStore     _stateStore;
+    private readonly HidHideClient? _hidHide;
+    private readonly HandleWatcher  _watcher = new();
+
+    private bool UseHidHide => _hidHide?.IsAvailable == true && App.UseHidHide;
 
     private OrchestratorState _state = OrchestratorState.Idle;
     private CancellationTokenSource? _cts;
@@ -37,9 +40,10 @@ public sealed class LaunchOrchestrator : IDisposable
     public event EventHandler<OrchestratorState>? StateChanged;
     public event EventHandler<string>?            ActivityLogged;
 
-    public LaunchOrchestrator(StateStore stateStore)
+    public LaunchOrchestrator(StateStore stateStore, HidHideClient? hidHide = null)
     {
         _stateStore = stateStore;
+        _hidHide    = hidHide;
     }
 
     // ── Public API ───────────────────────────────────────────────────────────────
@@ -59,7 +63,11 @@ public sealed class LaunchOrchestrator : IDisposable
         if (_flowTask is not null)
             try { await _flowTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); } catch { }
 
-        _stateStore.RestoreAll();
+        if (UseHidHide)
+            _hidHide!.EndGameSession();
+        else
+            _stateStore.RestoreAll();
+
         State = OrchestratorState.Idle;
         Log("Restored — all devices re-enabled.");
     }
@@ -76,10 +84,10 @@ public sealed class LaunchOrchestrator : IDisposable
 
     private async Task RunFlow(Profile profile, CancellationToken ct)
     {
-        Logger.Write($"[Orchestrator] RunFlow started — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.TriggerMode}");
+        Logger.Write($"[Orchestrator] RunFlow started — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.TriggerMode} backend={(UseHidHide ? "HidHide" : "pnputil")}");
         try
         {
-            DisableDevices(profile, ct);
+            HideDevices(profile, ct);
             ct.ThrowIfCancellationRequested();
 
             var gameProc = await LaunchGame(profile, ct);
@@ -92,7 +100,7 @@ public sealed class LaunchOrchestrator : IDisposable
                 await WaitForAcquisition(profile, ct);
                 ct.ThrowIfCancellationRequested();
 
-                await RestoreDevices(profile, ct);
+                await RestoreDisableThenRestore(profile, ct);
                 ct.ThrowIfCancellationRequested();
             }
 
@@ -114,27 +122,42 @@ public sealed class LaunchOrchestrator : IDisposable
         }
     }
 
-    // ── Phase 1: disable ─────────────────────────────────────────────────────────
+    // ── Phase 1: hide/disable devices ────────────────────────────────────────────
 
-    private void DisableDevices(Profile profile, CancellationToken ct)
+    private void HideDevices(Profile profile, CancellationToken ct)
     {
         State = OrchestratorState.DisablingDevices;
-        var toDisable = profile.DisableThenRestore.Concat(profile.KeepDisabled).ToList();
-        if (toDisable.Count == 0) return;
+        var toHide = profile.DisableThenRestore.Concat(profile.KeepDisabled).ToList();
+        if (toHide.Count == 0) return;
 
-        Log($"Disabling {toDisable.Count} device(s)...");
-        foreach (var dev in toDisable)
+        if (UseHidHide)
         {
-            ct.ThrowIfCancellationRequested();
-            try
+            // HidHide path: one batch call, no per-device state tracking needed.
+            // The session blacklist auto-cleans when our process exits.
+            Log($"Hiding {toHide.Count} device(s) via HidHide...");
+            var ids = toHide.Select(d => d.InstanceId).ToList();
+            var exe = profile.GameExecutablePath;
+            _hidHide!.BeginGameSession(ids, exe);
+            foreach (var dev in toHide)
+                Log($"  Hidden: {dev.FriendlyName}");
+        }
+        else
+        {
+            // pnputil path: disable each device individually, record for failsafe recovery.
+            Log($"Disabling {toHide.Count} device(s)...");
+            foreach (var dev in toHide)
             {
-                _stateStore.RecordDisabledRef(dev);
-                DeviceController.SetEnabledById(dev.InstanceId, false);
-                Log($"  Disabled: {dev.FriendlyName}");
-            }
-            catch (Exception ex)
-            {
-                Log($"  Warning: could not disable {dev.FriendlyName} — {ex.Message}");
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    _stateStore.RecordDisabledRef(dev);
+                    DeviceController.SetEnabledById(dev.InstanceId, false);
+                    Log($"  Disabled: {dev.FriendlyName}");
+                }
+                catch (Exception ex)
+                {
+                    Log($"  Warning: could not disable {dev.FriendlyName} — {ex.Message}");
+                }
             }
         }
     }
@@ -196,12 +219,15 @@ public sealed class LaunchOrchestrator : IDisposable
             LogVerbose("Acquisition timeout — proceeding anyway.");
     }
 
-    // ── Phase 4: restore devices one by one ──────────────────────────────────────
+    // ── Phase 4: restore DisableThenRestore devices one by one ───────────────────
 
-    private async Task RestoreDevices(Profile profile, CancellationToken ct)
+    private async Task RestoreDisableThenRestore(Profile profile, CancellationToken ct)
     {
         State = OrchestratorState.RestoringDevices;
         Log($"Re-enabling {profile.DisableThenRestore.Count} device(s) in order...");
+
+        var restored    = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var keepHidden  = profile.KeepDisabled.Select(d => d.InstanceId).ToList();
 
         foreach (var dev in profile.DisableThenRestore)
         {
@@ -210,8 +236,24 @@ public sealed class LaunchOrchestrator : IDisposable
             try
             {
                 Log($"  Enabling: {dev.FriendlyName}");
-                DeviceController.SetEnabledById(dev.InstanceId, true);
-                _stateStore.ClearEnabledById(dev.InstanceId);
+
+                if (UseHidHide)
+                {
+                    // Remove only this device from the session blacklist by rebuilding
+                    // the remaining list: KeepDisabled + not-yet-restored DisableThenRestore.
+                    restored.Add(dev.InstanceId);
+                    var remaining = profile.DisableThenRestore
+                        .Where(d => !restored.Contains(d.InstanceId))
+                        .Select(d => d.InstanceId)
+                        .Concat(keepHidden)
+                        .ToList();
+                    _hidHide!.UpdateSessionBlacklist(remaining);
+                }
+                else
+                {
+                    DeviceController.SetEnabledById(dev.InstanceId, true);
+                    _stateStore.ClearEnabledById(dev.InstanceId);
+                }
             }
             catch (Exception ex)
             {
@@ -219,7 +261,7 @@ public sealed class LaunchOrchestrator : IDisposable
                 continue;
             }
 
-            // Wait for the game to acknowledge this device
+            // Wait for the game to acknowledge this device (both backends).
             if (profile.TriggerMode == TriggerMode.HandleWatcher)
             {
                 var (vid, pid) = ParseVidPid(dev.InstanceId);
@@ -259,20 +301,32 @@ public sealed class LaunchOrchestrator : IDisposable
 
         Log($"{procName}.exe exited.");
 
-        if (profile.KeepDisabled.Count > 0)
+        if (UseHidHide)
         {
-            Log($"Re-enabling {profile.KeepDisabled.Count} Keep-Disabled device(s)...");
-            foreach (var dev in profile.KeepDisabled)
+            // End session: clears session blacklist + inverse whitelist, deactivates if no persistent entries.
+            if (profile.KeepDisabled.Count > 0)
+                Log($"Restoring {profile.KeepDisabled.Count} Keep-Disabled device(s)...");
+            _hidHide!.EndGameSession();
+            Log("All devices restored.");
+        }
+        else
+        {
+            // pnputil path: re-enable KeepDisabled devices and clear state records.
+            if (profile.KeepDisabled.Count > 0)
             {
-                try
+                Log($"Re-enabling {profile.KeepDisabled.Count} Keep-Disabled device(s)...");
+                foreach (var dev in profile.KeepDisabled)
                 {
-                    DeviceController.SetEnabledById(dev.InstanceId, true);
-                    _stateStore.ClearEnabledById(dev.InstanceId);
-                    Log($"  Enabled: {dev.FriendlyName}");
-                }
-                catch (Exception ex)
-                {
-                    Log($"  Warning: could not enable {dev.FriendlyName} — {ex.Message}");
+                    try
+                    {
+                        DeviceController.SetEnabledById(dev.InstanceId, true);
+                        _stateStore.ClearEnabledById(dev.InstanceId);
+                        Log($"  Enabled: {dev.FriendlyName}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"  Warning: could not enable {dev.FriendlyName} — {ex.Message}");
+                    }
                 }
             }
         }

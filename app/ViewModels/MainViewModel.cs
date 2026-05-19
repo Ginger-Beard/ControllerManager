@@ -13,11 +13,13 @@ public sealed class MainViewModel : ViewModelBase
 
     public MainViewModel()
     {
-        var resolver       = new VidResolver();
-        var orchestrator   = new LaunchOrchestrator(App.State);
+        // Always inject the client instance so dynamic backend switches (Settings tab)
+        // take effect immediately. IsHidHideBackend / UseHidHide checks at call sites
+        // decide which path is actually used.
+        var orchestrator   = new LaunchOrchestrator(App.State, App.HidHide);
         var processWatcher = new ProcessWatcher(App.ProfileStore, orchestrator);
 
-        Devices   = new DevicesViewModel(new DeviceEnumerator(resolver));
+        Devices   = new DevicesViewModel(new DeviceEnumerator(), App.HidHide);
         Games     = new GamesViewModel(App.ProfileStore, Devices);
         Dashboard = new DashboardViewModel(orchestrator, App.ProfileStore);
         Settings  = new SettingsViewModel(App.SettingsStore);

@@ -9,6 +9,7 @@ namespace ControllerManager.ViewModels;
 public sealed class DevicesViewModel : ViewModelBase, IDisposable
 {
     private readonly DeviceEnumerator _enumerator;
+    private readonly HidHideClient?   _hidHide;
     internal DeviceEnumerator Enumerator => _enumerator;
 
     private bool   _showAllHid;
@@ -18,10 +19,25 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
     private HidInputMonitor? _monitor;
     private bool             _isMonitorExpanded;
+    private bool             _hidHideActive;
 
-    public ObservableCollection<HidDevice>      Devices { get; } = [];
-    public ObservableCollection<AxisViewModel>  Axes    { get; } = [];
+    public ObservableCollection<HidDevice>       Devices { get; } = [];
+    public ObservableCollection<AxisViewModel>   Axes    { get; } = [];
     public ObservableCollection<ButtonViewModel> Buttons { get; } = [];
+
+    /// <summary>True when HidHide is the active backend for this session.</summary>
+    public bool IsHidHideBackend => _hidHide?.IsAvailable == true && App.UseHidHide;
+
+    /// <summary>Maps directly to IOCTL_SET_ACTIVE — master on/off for all HidHide hiding.</summary>
+    public bool HidHideActive
+    {
+        get => _hidHideActive;
+        set
+        {
+            if (!Set(ref _hidHideActive, value)) return;
+            Task.Run(() => _hidHide?.SetActive(value));
+        }
+    }
 
     public bool IsMonitorExpanded
     {
@@ -66,9 +82,11 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
     public ICommand CopyInstanceIdCommand    { get; }
     public ICommand CopyInterfacePathCommand { get; }
 
-    public DevicesViewModel(DeviceEnumerator enumerator)
+    public DevicesViewModel(DeviceEnumerator enumerator, HidHideClient? hidHide = null)
     {
-        _enumerator = enumerator;
+        _enumerator  = enumerator;
+        _hidHide     = hidHide;
+        _hidHideActive = hidHide?.IsAvailable == true && hidHide.GetActive();
 
         RefreshCommand = new RelayCommand(_ => Refresh(), _ => !IsRefreshing);
         CopyAllCommand = new RelayCommand(_ =>
@@ -106,9 +124,29 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
             try
             {
                 var list = _enumerator.GetAll(_showAllHid);
+
+                // Overlay HidHide persistent blacklist state so devices toggled off in the
+                // Devices tab appear as OFF even though they remain PnP-enabled.
+                bool activeState = false;
+                if (IsHidHideBackend && _hidHide != null)
+                {
+                    var blacklist = _hidHide.GetBlacklist();
+                    activeState   = _hidHide.GetActive();
+                    foreach (var d in list)
+                    {
+                        if (blacklist.Contains(d.InstanceId, StringComparer.OrdinalIgnoreCase))
+                            d.IsEnabled = false;
+                    }
+                }
+
                 Application.Current.Dispatcher.Invoke(() =>
                 {
                     MergeDevices(list);
+                    if (IsHidHideBackend)
+                    {
+                        _hidHideActive = activeState;
+                        OnPropertyChanged(nameof(HidHideActive));
+                    }
                     StatusText   = $"{list.Count} device(s) found.";
                     IsRefreshing = false;
                 });
@@ -156,26 +194,37 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
         IsRefreshing = true;
         StatusText   = device.IsEnabled
-            ? $"Disabling {device.FriendlyName}..."
-            : $"Enabling {device.FriendlyName}...";
+            ? $"Hiding {device.FriendlyName}..."
+            : $"Showing {device.FriendlyName}...";
 
         Task.Run(() =>
         {
             try
             {
-                if (device.IsEnabled)
-                    App.State.RecordDisabled(device);
+                if (IsHidHideBackend && _hidHide != null)
+                {
+                    // HidHide path: modify the persistent blacklist.
+                    if (device.IsEnabled)
+                        _hidHide.AddToPersistentBlacklist(device.InstanceId);
+                    else
+                        _hidHide.RemoveFromPersistentBlacklist(device.InstanceId);
+                }
+                else
+                {
+                    // pnputil path: PnP disable/enable with failsafe state.
+                    if (device.IsEnabled)
+                        App.State.RecordDisabled(device);
 
-                DeviceController.SetEnabled(device, !device.IsEnabled);
+                    DeviceController.SetEnabled(device, !device.IsEnabled);
 
-                if (!device.IsEnabled)
-                    App.State.ClearEnabled(device);
+                    if (!device.IsEnabled)
+                        App.State.ClearEnabled(device);
+                }
 
                 Application.Current.Dispatcher.Invoke(Refresh);
             }
             catch (Exception ex)
             {
-                // Don't refresh on failure — keep the error visible in the status bar
                 Application.Current.Dispatcher.Invoke(() =>
                 {
                     StatusText   = $"Error: {ex.Message}";

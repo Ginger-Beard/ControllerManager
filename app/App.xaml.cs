@@ -9,12 +9,21 @@ public partial class App : Application
 {
     private const string MutexName = "Global\\ControllerManager-3F8A1B2C-4D5E-6F7A-8B9C-0D1E2F3A4B5C";
 
-    public static StateStore    State        { get; private set; } = null!;
-    public static ProfileStore  ProfileStore { get; private set; } = null!;
-    public static SettingsStore SettingsStore { get; private set; } = null!;
-    public static AppSettings   Settings     { get; private set; } = null!;
-    public static IpcServer?    Ipc          { get; private set; }
-    public static TrayService?  Tray         { get; private set; }
+    public static StateStore      State         { get; private set; } = null!;
+    public static ProfileStore    ProfileStore  { get; private set; } = null!;
+    public static SettingsStore   SettingsStore { get; private set; } = null!;
+    public static AppSettings     Settings      { get; set; }         = null!;
+    public static HidHideClient   HidHide       { get; private set; } = null!;
+    public static IpcServer?      Ipc           { get; private set; }
+    public static TrayService?    Tray          { get; private set; }
+
+    /// <summary>
+    /// True when the HidHide backend should be used — driver is installed and the user
+    /// hasn't explicitly forced pnputil.
+    /// </summary>
+    public static bool UseHidHide =>
+        HidHide.IsAvailable &&
+        Settings.DeviceHidingBackend != DeviceHidingBackend.Pnputil;
 
     private Mutex? _mutex;
 
@@ -83,6 +92,9 @@ public partial class App : Application
             Settings      = SettingsStore.Load();
             Logger.SetLevel(Settings.LogLevel);
             State.RecoverOnStartup();
+
+            HidHide = new HidHideClient();
+            HidHide.RecoverOnStartup();
 
             // ── IPC server ───────────────────────────────────────────────────
             Ipc = new IpcServer();

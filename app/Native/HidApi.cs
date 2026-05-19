@@ -94,6 +94,40 @@ internal static class HidApi
 
     // ── hid.dll ─────────────────────────────────────────────────────────────────
 
+    // ── Device identification ────────────────────────────────────────────────────
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct HIDD_ATTRIBUTES
+    {
+        public uint   Size;          // must be set before call
+        public ushort VendorID;
+        public ushort ProductID;
+        public ushort VersionNumber;
+    }
+
+    [DllImport("hid.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static extern bool HidD_GetAttributes(SafeFileHandle HidDeviceObject, ref HIDD_ATTRIBUTES Attributes);
+
+    // Buffer size HidHide uses for string descriptors (127 WCHARs = 254 bytes).
+    public const int HidStringMax = 127;
+
+    [DllImport("hid.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static extern bool HidD_GetProductString(
+        SafeFileHandle HidDeviceObject,
+        [Out] char[]   Buffer,
+        uint           BufferLength);
+
+    [DllImport("hid.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static extern bool HidD_GetManufacturerString(
+        SafeFileHandle HidDeviceObject,
+        [Out] char[]   Buffer,
+        uint           BufferLength);
+
+    // ── Parse / caps ─────────────────────────────────────────────────────────────
+
     [DllImport("hid.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.U1)]
     public static extern bool HidD_GetPreparsedData(SafeFileHandle hidDeviceObject, out IntPtr preparsedData);

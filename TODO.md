@@ -109,6 +109,114 @@ Sunshine fork).
 - Per-device delay-before-enable override (some devices need settle time)
 - Community profile presets (game-specific JSON contributions via PR)
 - Alternative backend options for device hiding
+
+### Architecture: two-mode complexity — where does this go?
+With HidHide as the primary backend and pnputil becoming a deprecated fallback, several
+features built specifically for the pnputil model may be unnecessary in HidHide mode, and
+the growing `if (UseHidHide)` branches are a signal worth paying attention to.
+
+**HandleWatcher** — may be obsolete for HidHide.
+pnputil needed it because: you PnP-disable devices before launch, the game starts and
+scans DirectInput/WGI, you watch for the game to open a handle to the first device (the
+wheel), THEN re-enable the rest in sequence. The handle-open event was the only signal
+that the game had "acquired" the first device.
+With HidHide, hiding is at the file-open level. The game starts, tries to open hidden
+devices, gets ACCESS_DENIED, and continues — all in milliseconds. You can update the
+session blacklist at any point to reveal more devices. You don't need to watch handles to
+know when to reveal; a simple timer or even just "wait N ms after game starts" might be
+sufficient, since HidHide's reveal is instantaneous and the game will retry device
+enumeration on its own if the first scan misses something. Open question: does FH6
+re-enumerate after startup, or is the DirectInput burst truly one-shot? If one-shot, the
+ordering still matters and we need a timing signal — just not necessarily handle-watching.
+If games re-enumerate periodically, a timer is sufficient.
+
+**Shortcut export (Desktop / Start Menu / Steam links)** — may be less necessary.
+These exist because with pnputil you MUST pre-disable devices before the game process
+starts — there's a narrow window at game launch where DirectInput scans all devices, and
+if they're not already disabled, the wrong device gets slot #1. The shortcuts/steam-wrap
+ensure disable happens before the game exe runs.
+With HidHide the driver hooks `PsSetLoadImageNotifyRoutine` — access-denial is in effect
+from the moment the process image loads, before any userspace code runs. So even launching
+the game directly (without our wrapper) and THEN calling `BeginGameSession` a split-second
+later might work. That changes the value proposition of the launch shortcuts: they're no
+longer strictly required, just convenient for triggering the profile. Process watcher may
+be sufficient for most workflows. Steam wrapper (--steam-wrap) keeps the process alive for
+playtime tracking, which is independent of device hiding — still useful but for a different
+reason.
+
+**What this means for the codebase:**
+The current structure has two fully parallel code paths with conditionals throughout
+LaunchOrchestrator, DevicesViewModel, etc. There are a few directions:
+1. **Accept the two-path model** — it's temporary; pnputil path is legacy code on its way
+   out. Keep it, don't invest in it further, remove it once HidHide adoption is confirmed.
+2. **Make HidHide the only supported path** and remove pnputil entirely. Simpler code,
+   but requires HidHide as a hard prerequisite.
+3. **Redesign around HidHide's model** as the primary abstraction, with pnputil as a thin
+   compatibility shim that maps the new API onto the old behaviour where possible.
+
+Leaning toward option 1 for now: the pnputil path is already working and tested, leave it
+alone, let the HidHide path be the one that gets new features (the profile redesign, the
+cleaner Devices tab). When HidHide has been stable for a release cycle, remove pnputil.
+The conditionals are a smell but they're contained — they don't need to be fixed urgently.
+
+**Concrete things to decide before acting:**
+- Does FH6 re-enumerate DirectInput devices after startup or is it truly one-shot? (Test:
+  with HidHide, launch FH6 normally, then quickly run BeginGameSession — does the wheel
+  get FFB?)
+- If FH6 is one-shot, HandleWatcher is still needed as a timing signal even with HidHide.
+  If not, the whole "wait for acquisition" phase can be replaced with a fixed delay or
+  removed entirely for HidHide sessions.
+- Is there a real use case for Desktop/Start Menu shortcuts once process watcher + HidHide
+  works reliably? If process watcher covers auto-trigger and dashboard covers manual launch,
+  shortcuts may just be "nice to have" for power users.
+
+### Devices tab cleanup for HidHide mode
+When HidHide is the active backend, the Devices tab shows information that belongs to
+the pnputil world and is confusing or meaningless in a HidHide context:
+- **VID:PID column**: internal plumbing — the user doesn't need it here (it's for profile
+  building and debugging, not day-to-day use). Hide when HidHide is the backend, or move
+  it to a tooltip / "Show details" toggle.
+- **Instance ID column**: even more internal. Definitely hide by default in HidHide mode.
+- **Device names**: the current name comes from WMI `Win32_PnPEntity.Name`, which may differ
+  from what HidHide's own UI shows (which uses the `BusReportedDeviceDesc` property and/or
+  HID top-level collection names). Investigate whether HidHide's naming produces cleaner
+  results and align with it when HidHide is active, so the user sees the same device name
+  across both tools.
+- **Device scope**: HidHide operates at the HID interface level. The current Devices tab
+  deduplicates by USB composite root (collapses MI_00 + MI_01 of the same physical device
+  into one row) while HidHide targets individual instance paths. Verify that what we show
+  in the Devices tab corresponds 1:1 to what we put in the HidHide blacklist — a device
+  that appears as one row in our UI should map to exactly the instance path(s) HidHide uses.
+  If there's a mismatch, the device may not actually be hidden despite the toggle showing OFF.
+
+### Profile device list — redesign for HidHide / unified UI
+The current three-list model (Keep Enabled / Disable→Re-enable / Keep Disabled) was
+designed around pnputil's mental model of individually disabling/re-enabling devices via
+PnP. With HidHide as the primary backend, the framing shifts: devices aren't "disabled",
+they're "hidden from the game". The ordering of devices matters (which one the game sees
+first determines FFB assignment), and the three separate list boxes make that hard to see.
+
+Proposed redesign — a single ordered device list with per-row controls:
+- One list showing all devices in the profile, in order from top to bottom
+- Up ↑ / Down ↓ buttons (or drag handles) to set the reveal order
+- Each row has a role selector, replacing the three lists:
+  - **Always visible** — game can see this device the whole time (was "Keep Enabled")
+  - **Reveal after start** — hidden at launch, revealed once game acquires the first
+    "always visible" device (was "Disable→Re-enable" / HandleWatcher phase)
+  - **Always hidden** — never visible to this game (was "Keep Disabled")
+- The ordering within "Reveal after start" rows determines the sequential reveal sequence
+  (currently this is the order of the DisableThenRestore list)
+- The visual hierarchy makes it clear: top of the list = what the game sees first
+- Consider a summary line: "Game sees 1 device at launch, then 3 more in sequence, 2 always hidden"
+
+Naming audit — terms to replace across the codebase and UI once this ships:
+- "Keep Enabled" → "Always Visible" (or "Always On")
+- "Disable→Re-enable" / "Disable Then Restore" → "Reveal After Start" (or "Sequential")
+- "Keep Disabled" → "Always Hidden"
+- "Disabling devices" (Dashboard status) → "Hiding devices"
+- "Re-enabling" → "Revealing" or "Restoring"
+The JSON profile keys (`keepEnabled`, `disableThenRestore`, `keepDisabled`) should stay
+unchanged for backwards compatibility — rename only in UI strings and code symbols.
 - **Idle/standby device profile** — a default profile that's always active when no game
   is running. Devices listed in it stay disabled at all times unless a game profile takes
   over, then restores them to the idle state (not necessarily all-enabled) when the game
@@ -236,13 +344,17 @@ check is in place from the moment the process image loads (Config.c).
 
 **IOCTL interface** (Shared/HidHideIoctlContract.h):
 - Control device path: `\\.\HidHide`
-- `IOCTL_GET/SET_WHITELIST` (0x8FF80800/04) — persistent, full image paths, multi-string
-- `IOCTL_GET/SET_BLACKLIST` (0x8FF80808/0C) — persistent, device instance paths, multi-string
-- `IOCTL_GET/SET_ACTIVE`    (0x8FF80810/14) — BOOLEAN on/off
-- `IOCTL_ADD_SESSION_BLACKLIST` (0x8FF80820) — in-memory, auto-cleans on our exit
-- `IOCTL_CLR_SESSION_BLACKLIST` (0x8FF80824) — explicit clear
-- All data as REG_MULTI_SZ (null-separated, double-null terminated wide strings)
+- Open with `GENERIC_READ` (all IOCTLs use `FILE_READ_DATA` access)
+- `IOCTL_GET/SET_WHITELIST`  (0x80016000/04) — persistent, **NT device paths** (`\Device\HarddiskVolumeX\...`), multi-string
+- `IOCTL_GET/SET_BLACKLIST`  (0x80016008/0C) — persistent, device instance paths, multi-string
+- `IOCTL_GET/SET_ACTIVE`     (0x80016010/14) — BOOLEAN (1 byte) on/off
+- `IOCTL_GET/SET_WLINVERSE`  (0x80016018/1C) — BOOLEAN; when true, whitelist is a deny-list (only listed processes are blocked)
+- `IOCTL_ADD_SESSION_BLACKLIST` (0x80016020) — in-memory, keyed by caller PID, auto-cleans on our exit
+- `IOCTL_CLR_SESSION_BLACKLIST` (0x80016024) — clears session entries for calling PID only
+- All multi-string data as UTF-16 null-separated, double-null terminated (REG_MULTI_SZ)
 - C++ wrapper reference: HidHideCLI/src/FilterDriverProxy.cpp
+- IOCTL formula: CTL_CODE(32769, function, METHOD_BUFFERED=0, FILE_READ_DATA=1) = 0x80014000 | (function << 2)
+- Note: GET operations use first call with null output buffer to query needed byte size
 
 **What to build**:
 1. `HidHideClient.cs` service — `DeviceIoControl` P/Invoke wrapper, multi-string

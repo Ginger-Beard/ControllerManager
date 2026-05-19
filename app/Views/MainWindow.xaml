@@ -121,7 +121,7 @@
                     <!-- Toolbar -->
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                         <CheckBox DockPanel.Dock="Right"
-                                  Content="Show all HID"
+                                  Content="Show all devices"
                                   IsChecked="{Binding ShowAllHid}"
                                   VerticalAlignment="Center"
                                   Margin="8,0,0,0"/>
@@ -133,6 +133,23 @@
                                 Command="{Binding RefreshCommand}"
                                 DockPanel.Dock="Right"
                                 Padding="12,4" Margin="4,0,0,0"/>
+                        <!-- HidHide global active toggle — only shown when HidHide backend is in use -->
+                        <CheckBox DockPanel.Dock="Right"
+                                  Content="Hiding active"
+                                  IsChecked="{Binding HidHideActive}"
+                                  VerticalAlignment="Center"
+                                  Margin="12,0,0,0"
+                                  ToolTip="Master switch: when off, HidHide filter is bypassed and all processes see all devices">
+                            <CheckBox.Style>
+                                <Style TargetType="CheckBox">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsHidHideBackend}" Value="False">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </CheckBox.Style>
+                        </CheckBox>
                         <TextBlock Text="{Binding StatusText}"
                                    VerticalAlignment="Center"
                                    Foreground="Gray"/>
@@ -345,6 +362,49 @@
             <!-- ── Settings ───────────────────────────────────────────────── -->
             <TabItem Header="Settings" DataContext="{Binding Settings}">
                 <StackPanel Margin="16" MaxWidth="480" HorizontalAlignment="Left">
+
+                    <!-- Device hiding backend -->
+                    <TextBlock Text="Device hiding backend" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,10"/>
+
+                    <RadioButton IsChecked="{Binding BackendIsHidHide}" Margin="0,0,0,6">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="HidHide (recommended)  " VerticalAlignment="Center"/>
+                            <!-- Installed indicator -->
+                            <TextBlock Foreground="#3CB371" FontWeight="SemiBold" VerticalAlignment="Center"
+                                       Visibility="{Binding HidHideInstalled, Converter={StaticResource BoolVisConverter}}">
+                                ✓ Installed
+                            </TextBlock>
+                            <!-- Not installed indicator + download link -->
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HidHideInstalled}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <TextBlock Text="✗ Not installed  " Foreground="#CC4444" FontWeight="SemiBold"/>
+                                <TextBlock>
+                                    <Hyperlink Command="{Binding OpenHidHideDownloadCommand}">Download ↗</Hyperlink>
+                                </TextBlock>
+                            </StackPanel>
+                        </StackPanel>
+                    </RadioButton>
+
+                    <RadioButton IsChecked="{Binding BackendIsPnputil}" Margin="0,0,0,4">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Basic (pnputil)  " VerticalAlignment="Center"/>
+                            <Border Background="#999" CornerRadius="3" Padding="4,1" VerticalAlignment="Center">
+                                <TextBlock Text="Deprecated" Foreground="White" FontSize="10"/>
+                            </Border>
+                            <TextBlock Text="  Some devices may require reboots" Foreground="Gray"
+                                       FontSize="11" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </RadioButton>
+
+                    <Separator Margin="0,10,0,12"/>
 
                     <TextBlock Text="General" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,10"/>
 
