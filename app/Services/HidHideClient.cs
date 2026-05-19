@@ -302,8 +302,9 @@ public sealed class HidHideClient
 
         // Clear any stale session state from a previous crash.
         ClearSessionBlacklist();
-        _sessionActive     = false;
-        _sessionGameNtPath = null;
+        _sessionActive                 = false;
+        _sessionGameNtPath             = null;
+        _sessionRestoredFromPersistent = null;
 
         // ApplyState rebuilds whitelist/inverse/active correctly from the
         // persistent blacklist entries that survived the restart.

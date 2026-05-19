@@ -47,14 +47,13 @@ public sealed class DeviceEnumerator
     [StructLayout(LayoutKind.Sequential)]
     private struct DEVPROPKEY { public Guid fmtid; public uint pid; }
 
-    private static DEVPROPKEY DEVPKEY_Device_DeviceDesc => new()
-    {
-        fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 2
-    };
-    private static DEVPROPKEY DEVPKEY_Device_ContainerId => new()
-    {
-        fmtid = new Guid("8c7ed206-3f8a-4827-b3ab-ae9e1faefc6c"), pid = 2
-    };
+    // {a45c254e-...} pid=2  → DeviceDesc     — generic class-driver string ("HID-compliant game controller")
+    // {a45c254e-...} pid=14 → FriendlyName   — set by driver package, usually vendor name ("Xbox 360 Controller")
+    // {540b947e-...} pid=4  → BusReportedDesc — USB string from device firmware, read from parent node
+    private static DEVPROPKEY DEVPKEY_Device_DeviceDesc   => new() { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 2  };
+    private static DEVPROPKEY DEVPKEY_Device_FriendlyName => new() { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 };
+    private static DEVPROPKEY DEVPKEY_BusReportedDeviceDesc => new() { fmtid = new Guid("540b947e-8b40-45bc-a8a2-6a0b894cbda2"), pid = 4  };
+    private static DEVPROPKEY DEVPKEY_Device_ContainerId  => new() { fmtid = new Guid("8c7ed206-3f8a-4827-b3ab-ae9e1faefc6c"), pid = 2  };
 
     [DllImport("CfgMgr32.dll", CharSet = CharSet.Unicode)]
     private static extern int CM_Locate_DevNodeW(
@@ -369,8 +368,16 @@ public sealed class DeviceEnumerator
             .ToList();
     }
 
-    // ── Device description fallback (DEVPKEY_Device_DeviceDesc) ──────────────────
+    // ── Device description fallback ───────────────────────────────────────────────
 
+    /// <summary>
+    /// Returns the best available human-readable name for a device using only
+    /// CM property lookups — no device file open required, so works even when
+    /// the device is HidHide-blocked.
+    ///
+    /// Priority: FriendlyName (driver package) → BusReportedDeviceDesc (USB firmware
+    /// string from parent node) → DeviceDesc (generic class-driver fallback).
+    /// </summary>
     private static string? GetDeviceDescription(string instanceId)
     {
         try
@@ -378,9 +385,23 @@ public sealed class DeviceEnumerator
             if (CM_Locate_DevNodeW(out uint node, instanceId, CM_LOCATE_DEVNODE_PHANTOM) != CR_SUCCESS)
                 return null;
 
+            // 1. FriendlyName — set by the driver package, usually the most descriptive
+            var friendly = ReadNodeStringProperty(node, DEVPKEY_Device_FriendlyName);
+            if (!string.IsNullOrWhiteSpace(friendly)) return friendly;
+
+            // 2. BusReportedDeviceDesc — USB string from the device's own firmware,
+            //    stored on the parent USB node
+            if (CM_Get_Parent(out uint parentNode, node, 0) == CR_SUCCESS)
+            {
+                var busName = ReadNodeStringProperty(parentNode, DEVPKEY_BusReportedDeviceDesc);
+                if (!string.IsNullOrWhiteSpace(busName)
+                    && !busName.Contains("Hub", StringComparison.OrdinalIgnoreCase))
+                    return busName;
+            }
+
+            // 3. DeviceDesc — generic fallback ("HID-compliant game controller")
             var key = DEVPKEY_Device_DeviceDesc;
             uint type = 0, size = 0;
-            // First call: get required buffer size.
             CM_Get_DevNode_PropertyW(node, ref key, out type, null, ref size, 0);
             if (size == 0 || type != DEVPROP_TYPE_STRING) return null;
 
@@ -391,6 +412,17 @@ public sealed class DeviceEnumerator
             return Encoding.Unicode.GetString(raw).TrimEnd('\0').Trim();
         }
         catch { return null; }
+    }
+
+    private static string? ReadNodeStringProperty(uint node, DEVPROPKEY key)
+    {
+        uint type = 0, size = 0;
+        CM_Get_DevNode_PropertyW(node, ref key, out type, null, ref size, 0);
+        if (size == 0 || type != DEVPROP_TYPE_STRING) return null;
+        var raw = new byte[size];
+        if (CM_Get_DevNode_PropertyW(node, ref key, out _, raw, ref size, 0) != CR_SUCCESS)
+            return null;
+        return Encoding.Unicode.GetString(raw).TrimEnd('\0').Trim();
     }
 
     // ── Deduplication (unchanged: walk up to USB composite root) ─────────────────
