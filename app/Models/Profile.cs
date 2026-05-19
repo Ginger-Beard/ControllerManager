@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace HIDReorder.Models;
+namespace ControllerManager.Models;
 
 public class Profile
 {

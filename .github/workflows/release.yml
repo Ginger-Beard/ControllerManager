@@ -24,7 +24,7 @@ jobs:
       # Self-contained — includes .NET runtime, just works
       - name: Publish (self-contained)
         run: >
-          dotnet publish app/HIDReorder.csproj
+          dotnet publish app/ControllerManager.csproj
           -c Release -r win-x64 --self-contained
           -p:PublishSingleFile=true
           -o publish-sc
@@ -32,20 +32,20 @@ jobs:
       # Framework-dependent — requires .NET 10 Desktop Runtime, much smaller
       - name: Publish (slim / framework-dependent)
         run: >
-          dotnet publish app/HIDReorder.csproj
+          dotnet publish app/ControllerManager.csproj
           -c Release -r win-x64 --no-self-contained
           -p:PublishSingleFile=true
           -o publish-fd
 
       - name: Rename slim build
-        run: Rename-Item publish-fd\HIDReorder.exe HIDReorder-slim.exe
+        run: Rename-Item publish-fd\ControllerManager.exe ControllerManager-slim.exe
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            publish-sc/HIDReorder.exe
-            publish-fd/HIDReorder-slim.exe
+            publish-sc/ControllerManager.exe
+            publish-fd/ControllerManager-slim.exe
           generate_release_notes: true
           overwrite: true
           body: |
@@ -53,5 +53,5 @@ jobs:
 
             | File | Description |
             |------|-------------|
-            | `HIDReorder.exe` | ✅ Recommended — includes .NET runtime, just run it |
-            | `HIDReorder-slim.exe` | Requires [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) — much smaller |
+            | `ControllerManager.exe` | ✅ Recommended — includes .NET runtime, just run it |
+            | `ControllerManager-slim.exe` | Requires [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) — much smaller |

@@ -1,6 +1,6 @@
-using HIDReorder.Services;
+using ControllerManager.Services;
 
-namespace HIDReorder.Cli;
+namespace ControllerManager.Cli;
 
 /// <summary>
 /// Handles --launch &lt;profileId&gt; when this is the first instance.

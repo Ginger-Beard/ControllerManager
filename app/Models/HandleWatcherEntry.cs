@@ -1,4 +1,4 @@
-namespace HIDReorder.Models;
+namespace ControllerManager.Models;
 
 public sealed record HandleWatcherEntry(
     string Timestamp,

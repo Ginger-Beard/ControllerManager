@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace HIDReorder.Native;
+namespace ControllerManager.Native;
 
 internal static class NtDll
 {

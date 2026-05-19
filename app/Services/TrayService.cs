@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 public sealed class TrayService : IDisposable
 {
@@ -13,7 +13,7 @@ public sealed class TrayService : IDisposable
 
         _icon = new System.Windows.Forms.NotifyIcon
         {
-            Text    = "HID Reorder",
+            Text    = "Controller Manager",
             Icon    = LoadIcon(),
             Visible = true,
         };
@@ -59,7 +59,7 @@ public sealed class TrayService : IDisposable
     {
         menu.Items.Clear();
 
-        var showItem = new System.Windows.Forms.ToolStripMenuItem("Show HID Reorder");
+        var showItem = new System.Windows.Forms.ToolStripMenuItem("Show Controller Manager");
         showItem.Font = new System.Drawing.Font(showItem.Font, System.Drawing.FontStyle.Bold);
         showItem.Click += (_, _) => ShowWindow();
         menu.Items.Add(showItem);

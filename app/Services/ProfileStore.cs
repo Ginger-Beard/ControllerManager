@@ -1,7 +1,7 @@
 using System.Text.Json;
-using HIDReorder.Models;
+using ControllerManager.Models;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 public sealed class ProfileStore(string path)
 {

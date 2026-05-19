@@ -1,7 +1,7 @@
-using HIDReorder.Native;
+using ControllerManager.Native;
 using Microsoft.Win32.SafeHandles;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 /// <summary>
 /// Opens a HID device interface, reads its capability descriptors, and (optionally)

@@ -1,7 +1,7 @@
 using System.Diagnostics;
-using HIDReorder.Models;
+using ControllerManager.Models;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 /// <summary>
 /// Background safety-net: detects game launches that didn't go through

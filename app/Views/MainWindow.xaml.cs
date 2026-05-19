@@ -2,9 +2,9 @@ using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using HIDReorder.ViewModels;
+using ControllerManager.ViewModels;
 
-namespace HIDReorder.Views;
+namespace ControllerManager.Views;
 
 public partial class MainWindow : Window
 {

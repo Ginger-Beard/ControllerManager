@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
 
-namespace HIDReorder.Views;
+namespace ControllerManager.Views;
 
 /// <summary>Binds enum value to bool for RadioButton IsChecked.</summary>
 public sealed class EnumBoolConverter : IValueConverter

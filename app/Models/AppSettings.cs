@@ -1,7 +1,7 @@
 using System.Text.Json.Serialization;
-using HIDReorder.Models;
+using ControllerManager.Models;
 
-namespace HIDReorder.Models;
+namespace ControllerManager.Models;
 
 public enum LogLevel { Off, Normal, Verbose }
 

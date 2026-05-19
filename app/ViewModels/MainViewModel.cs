@@ -1,6 +1,6 @@
-using HIDReorder.Services;
+using ControllerManager.Services;
 
-namespace HIDReorder.ViewModels;
+namespace ControllerManager.ViewModels;
 
 public sealed class MainViewModel : ViewModelBase
 {

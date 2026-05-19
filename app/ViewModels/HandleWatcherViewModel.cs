@@ -3,10 +3,10 @@ using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Input;
-using HIDReorder.Models;
-using HIDReorder.Services;
+using ControllerManager.Models;
+using ControllerManager.Services;
 
-namespace HIDReorder.ViewModels;
+namespace ControllerManager.ViewModels;
 
 public sealed class HandleWatcherViewModel : ViewModelBase, IDisposable
 {

@@ -1,7 +1,7 @@
 using System.IO.Pipes;
 using System.Text.Json;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 /// <summary>
 /// Runs in the main instance. Listens for requests from shortcut/Steam wrapper
@@ -9,7 +9,7 @@ namespace HIDReorder.Services;
 /// </summary>
 public sealed class IpcServer : IDisposable
 {
-    public const string PipeName = "HIDReorder";
+    public const string PipeName = "ControllerManager";
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _listenTask;

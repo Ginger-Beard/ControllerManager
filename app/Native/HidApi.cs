@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
-namespace HIDReorder.Native;
+namespace ControllerManager.Native;
 
 /// <summary>
 /// P/Invoke surface for Windows HID API (hid.dll) and supporting kernel32 calls.

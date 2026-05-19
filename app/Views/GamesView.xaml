@@ -1,7 +1,7 @@
-<UserControl x:Class="HIDReorder.Views.GamesView"
+<UserControl x:Class="ControllerManager.Views.GamesView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:models="clr-namespace:HIDReorder.Models">
+             xmlns:models="clr-namespace:ControllerManager.Models">
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="190"/>

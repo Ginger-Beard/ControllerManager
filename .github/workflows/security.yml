@@ -41,7 +41,7 @@ jobs:
           queries: security-and-quality
 
       - name: Build for CodeQL
-        run: dotnet build app/HIDReorder.csproj -c Release
+        run: dotnet build app/ControllerManager.csproj -c Release
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
@@ -63,12 +63,12 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore packages
-        run: dotnet restore app/HIDReorder.csproj
+        run: dotnet restore app/ControllerManager.csproj
 
       - name: Audit for vulnerable packages
         shell: pwsh
         run: |
-          $output = dotnet list app/HIDReorder.csproj package --vulnerable --include-transitive 2>&1
+          $output = dotnet list app/ControllerManager.csproj package --vulnerable --include-transitive 2>&1
           Write-Host $output
           if (($output -join "`n") -match "has the following vulnerable packages") {
             Write-Error "Vulnerable NuGet packages detected — review output above."

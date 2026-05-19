@@ -1,8 +1,8 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
-using HIDReorder.Models;
+using ControllerManager.Models;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 public enum OrchestratorState
 {

@@ -1,6 +1,6 @@
 using System.Windows.Input;
 
-namespace HIDReorder.ViewModels;
+namespace ControllerManager.ViewModels;
 
 public sealed class RelayCommand(Action<object?> execute, Func<object?, bool>? canExecute = null)
     : ICommand

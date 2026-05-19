@@ -2,10 +2,10 @@ using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Input;
-using HIDReorder.Models;
-using HIDReorder.Services;
+using ControllerManager.Models;
+using ControllerManager.Services;
 
-namespace HIDReorder.ViewModels;
+namespace ControllerManager.ViewModels;
 
 public sealed class GamesViewModel : ViewModelBase
 {
@@ -134,7 +134,7 @@ public sealed class GamesViewModel : ViewModelBase
         {
             if (_selectedProfile is null) return;
             var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName
-                   ?? "HIDReorder.exe";
+                   ?? "ControllerManager.exe";
             var cmd = $"\"{exe}\" --steam-wrap {_selectedProfile.Id} -- %command%";
             Clipboard.SetText(cmd);
         }, _ => _selectedProfile is not null);
@@ -146,12 +146,12 @@ public sealed class GamesViewModel : ViewModelBase
             {
                 var path = ShortcutExporter.DesktopPath(_selectedProfile.Name);
                 ShortcutExporter.CreateShortcut(path, _selectedProfile.Id, _selectedProfile.GameExecutablePath);
-                MessageBox.Show($"Shortcut created:\n{path}", "HID Reorder",
+                MessageBox.Show($"Shortcut created:\n{path}", "Controller Manager",
                     MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed: {ex.Message}", "HID Reorder",
+                MessageBox.Show($"Failed: {ex.Message}", "Controller Manager",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }, _ => _selectedProfile is not null);
@@ -163,12 +163,12 @@ public sealed class GamesViewModel : ViewModelBase
             {
                 var path = ShortcutExporter.StartMenuPath(_selectedProfile.Name);
                 ShortcutExporter.CreateShortcut(path, _selectedProfile.Id, _selectedProfile.GameExecutablePath);
-                MessageBox.Show($"Shortcut created:\n{path}", "HID Reorder",
+                MessageBox.Show($"Shortcut created:\n{path}", "Controller Manager",
                     MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed: {ex.Message}", "HID Reorder",
+                MessageBox.Show($"Failed: {ex.Message}", "Controller Manager",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }, _ => _selectedProfile is not null);
@@ -187,12 +187,12 @@ public sealed class GamesViewModel : ViewModelBase
             try
             {
                 File.WriteAllText(dlg.FileName, JsonSerializer.Serialize(_selectedProfile, JsonOpts));
-                MessageBox.Show($"Profile exported to:\n{dlg.FileName}", "HID Reorder",
+                MessageBox.Show($"Profile exported to:\n{dlg.FileName}", "Controller Manager",
                     MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Export failed: {ex.Message}", "HID Reorder",
+                MessageBox.Show($"Export failed: {ex.Message}", "Controller Manager",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }, _ => _selectedProfile is not null);
@@ -218,7 +218,7 @@ public sealed class GamesViewModel : ViewModelBase
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Import failed: {ex.Message}", "HID Reorder",
+                MessageBox.Show($"Import failed: {ex.Message}", "Controller Manager",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         });

@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace HIDReorder.ViewModels;
+namespace ControllerManager.ViewModels;
 
 public abstract class ViewModelBase : INotifyPropertyChanged
 {

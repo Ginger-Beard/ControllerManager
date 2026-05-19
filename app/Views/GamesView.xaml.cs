@@ -1,6 +1,6 @@
 using System.Windows.Controls;
 
-namespace HIDReorder.Views;
+namespace ControllerManager.Views;
 
 public partial class GamesView : UserControl
 {

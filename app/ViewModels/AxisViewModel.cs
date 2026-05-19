@@ -1,4 +1,4 @@
-namespace HIDReorder.ViewModels;
+namespace ControllerManager.ViewModels;
 
 public sealed class AxisViewModel : ViewModelBase
 {

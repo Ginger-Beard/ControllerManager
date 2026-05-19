@@ -1,6 +1,6 @@
 using System.ComponentModel;
 
-namespace HIDReorder.Models;
+namespace ControllerManager.Models;
 
 public sealed class HidDevice : INotifyPropertyChanged
 {

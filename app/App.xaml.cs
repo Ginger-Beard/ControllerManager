@@ -1,13 +1,13 @@
 using System.Threading;
 using System.Windows;
-using HIDReorder.Models;
-using HIDReorder.Services;
+using ControllerManager.Models;
+using ControllerManager.Services;
 
-namespace HIDReorder;
+namespace ControllerManager;
 
 public partial class App : Application
 {
-    private const string MutexName = "Global\\HIDReorder-3F8A1B2C-4D5E-6F7A-8B9C-0D1E2F3A4B5C";
+    private const string MutexName = "Global\\ControllerManager-3F8A1B2C-4D5E-6F7A-8B9C-0D1E2F3A4B5C";
 
     public static StateStore    State        { get; private set; } = null!;
     public static ProfileStore  ProfileStore { get; private set; } = null!;
@@ -25,7 +25,7 @@ public partial class App : Application
         DispatcherUnhandledException += (_, ex) =>
         {
             Logger.WriteException("UI thread", ex.Exception);
-            MessageBox.Show(ex.Exception.ToString(), "HID Reorder — Unhandled Error",
+            MessageBox.Show(ex.Exception.ToString(), "Controller Manager — Unhandled Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             ex.Handled = true;
             Shutdown(1);
@@ -35,7 +35,7 @@ public partial class App : Application
         {
             var domainEx = ex.ExceptionObject as Exception ?? new Exception(ex.ExceptionObject?.ToString() ?? "unknown");
             Logger.WriteException("AppDomain (fatal=" + ex.IsTerminating + ")", domainEx);
-            MessageBox.Show(ex.ExceptionObject?.ToString() ?? "Unknown error", "HID Reorder — Fatal Error",
+            MessageBox.Show(ex.ExceptionObject?.ToString() ?? "Unknown error", "Controller Manager — Fatal Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         };
 
@@ -72,7 +72,7 @@ public partial class App : Application
             // ── Shared services ──────────────────────────────────────────────
             var appData = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "HIDReorder");
+                "ControllerManager");
             Directory.CreateDirectory(appData);
 
             Logger.Initialize(appData);
@@ -105,7 +105,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.ToString(), "HID Reorder — Startup Error",
+            MessageBox.Show(ex.ToString(), "Controller Manager — Startup Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }

@@ -2,9 +2,10 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
-using HIDReorder.Models;
+using ControllerManager.Models;
+using Microsoft.Win32;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 public static class DeviceController
 {
@@ -102,39 +103,51 @@ public static class DeviceController
             Logger.WriteVerbose($"[DeviceController] pnputil {verb} {candidate}");
             try
             {
-                using var p = Process.Start(new ProcessStartInfo
-                {
-                    FileName               = "pnputil.exe",
-                    Arguments              = $"{verb} \"{candidate}\"",
-                    UseShellExecute        = false,
-                    CreateNoWindow         = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true,
-                })!;
-
-                var stdoutTask = p.StandardOutput.ReadToEndAsync();
-                var stderrTask = p.StandardError.ReadToEndAsync();
-                var exited     = p.WaitForExit(15_000);
-
-                var stdout = stdoutTask.Result.Trim();
-                var stderr = stderrTask.Result.Trim();
+                var (exitCode, stdout, stderr) = RunPnputil($"{verb} \"{candidate}\"");
 
                 if (!string.IsNullOrEmpty(stdout)) Logger.WriteVerbose($"[DeviceController] stdout: {stdout}");
                 if (!string.IsNullOrEmpty(stderr)) Logger.WriteVerbose($"[DeviceController] stderr: {stderr}");
+                Logger.WriteVerbose($"[DeviceController] exit code: {exitCode}");
 
-                if (!exited)
+                if (exitCode == 0) return;
+
+                // exit 3010 = ERROR_SUCCESS_REBOOT_REQUIRED: the MOZA Windows Driver (and some
+                // others) can't fully stop their driver stack while it's in use, but the device
+                // IS immediately invisible to DirectInput/games — ConfigFlags=1 is written and
+                // the HID interface disappears from the enumeration. The driver unloads on next
+                // reboot. For our purposes the disable succeeded.
+                if (!enable && exitCode == 3010) return;
+
+                // exit 50 on disable with "pending system reboot": two possible states.
+                // (a) ConfigFlags=1 — a previous 3010 already disabled the device; it's
+                //     invisible to games. Treat as success.
+                // (b) ConfigFlags=0 — the driver's internal pending state survived a
+                //     registry clear+rescan recovery, but the device is NOT actually
+                //     invisible. Report an error so the user knows to reboot.
+                if (!enable && exitCode == 50 &&
+                    stdout.Contains("pending system reboot", StringComparison.OrdinalIgnoreCase))
                 {
-                    try { p.Kill(); } catch { }
-                    throw new TimeoutException("pnputil did not complete within 15 seconds.");
+                    if (ReadConfigFlags(candidate) == 1) return;
+                    throw new InvalidOperationException(
+                        "The driver did not release its pending state after recovery. " +
+                        "Reboot Windows to restore normal operation.");
                 }
 
-                Logger.WriteVerbose($"[DeviceController] exit code: {p.ExitCode}");
-
-                if (p.ExitCode == 0) return; // success — done
+                // exit 50 on enable with "pending system reboot" = device was disabled via the
+                // 3010 path above. pnputil refuses to re-enable it in that state. Clear
+                // ConfigFlags in the registry and trigger a hardware rescan, which re-enumerates
+                // the device without a full reboot.
+                if (enable && exitCode == 50 &&
+                    stdout.Contains("pending system reboot", StringComparison.OrdinalIgnoreCase))
+                {
+                    Logger.WriteVerbose($"[DeviceController] pending-reboot enable fallback → {candidate}");
+                    ClearConfigFlagsAndScan(candidate);
+                    return;
+                }
 
                 var msg = !string.IsNullOrEmpty(stderr) ? stderr
                         : !string.IsNullOrEmpty(stdout) ? stdout
-                        : $"pnputil exited {p.ExitCode}";
+                        : $"pnputil exited {exitCode}";
                 throw new InvalidOperationException(msg);
             }
             catch (Exception ex)
@@ -145,6 +158,72 @@ public static class DeviceController
         }
 
         throw firstException ?? new InvalidOperationException("Failed to change device state.");
+    }
+
+    private static (int exitCode, string stdout, string stderr) RunPnputil(string arguments)
+    {
+        using var p = Process.Start(new ProcessStartInfo
+        {
+            FileName               = "pnputil.exe",
+            Arguments              = arguments,
+            UseShellExecute        = false,
+            CreateNoWindow         = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+        })!;
+
+        var stdoutTask = p.StandardOutput.ReadToEndAsync();
+        var stderrTask = p.StandardError.ReadToEndAsync();
+        var exited     = p.WaitForExit(15_000);
+
+        var stdout = stdoutTask.Result.Trim();
+        var stderr = stderrTask.Result.Trim();
+
+        if (!exited)
+        {
+            try { p.Kill(); } catch { }
+            throw new TimeoutException("pnputil did not complete within 15 seconds.");
+        }
+
+        return (p.ExitCode, stdout, stderr);
+    }
+
+    // Clears ConfigFlags=1 (disabled marker) directly in the registry, then triggers a
+    // hardware rescan to re-enumerate the device — bypasses the pnputil block on devices
+    // stuck in "pending system reboot" state after a 3010 disable.
+    private static void ClearConfigFlagsAndScan(string instanceId)
+    {
+        var regPath = $@"SYSTEM\CurrentControlSet\Enum\{instanceId}";
+        using (var key = Registry.LocalMachine.OpenSubKey(regPath, writable: true))
+        {
+            if (key != null)
+            {
+                key.SetValue("ConfigFlags", 0, RegistryValueKind.DWord);
+                Logger.WriteVerbose($"[DeviceController] Cleared ConfigFlags for {instanceId}");
+            }
+            else
+            {
+                Logger.Write($"[DeviceController] Warning: registry key not found for {instanceId}");
+            }
+        }
+
+        Logger.WriteVerbose("[DeviceController] pnputil /scan-devices");
+        var (exitCode, stdout, _) = RunPnputil("/scan-devices");
+        if (!string.IsNullOrEmpty(stdout)) Logger.WriteVerbose($"[DeviceController] stdout: {stdout}");
+        Logger.WriteVerbose($"[DeviceController] exit code: {exitCode}");
+
+        if (exitCode != 0)
+            throw new InvalidOperationException($"pnputil /scan-devices failed (exit {exitCode})");
+    }
+
+    private static int ReadConfigFlags(string instanceId)
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Enum\{instanceId}");
+            return Convert.ToInt32(key?.GetValue("ConfigFlags") ?? 0);
+        }
+        catch { return 0; }
     }
 
     // ── CfgMgr32 parent lookup ───────────────────────────────────────────────────

@@ -2,10 +2,11 @@ using System.Management;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
-using HIDReorder.Models;
-using HIDReorder.Native;
+using ControllerManager.Models;
+using ControllerManager.Native;
+using Microsoft.Win32;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 public sealed class DeviceEnumerator(VidResolver resolver)
 {
@@ -60,6 +61,17 @@ public sealed class DeviceEnumerator(VidResolver resolver)
     // composite roots have different serial/port hashes in the instance ID).
     // Falls back to normalised instance-ID string for virtual/root devices that have
     // no VID/PID ancestor (vJoy HID\HIDCLASS nodes, RZVIRTUAL devices, etc.).
+    private static int ReadConfigFlags(string? instanceId)
+    {
+        if (string.IsNullOrEmpty(instanceId)) return 0;
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Enum\{instanceId}");
+            return Convert.ToInt32(key?.GetValue("ConfigFlags") ?? 0);
+        }
+        catch { return 0; }
+    }
+
     private static string GetDedupeKey(string instanceId)
     {
         try
@@ -247,7 +259,6 @@ public sealed class DeviceEnumerator(VidResolver resolver)
             if (instanceId.StartsWith("ROOT\\", StringComparison.OrdinalIgnoreCase)) continue;
 
             var errorCode = (uint)(obj["ConfigManagerErrorCode"] ?? 0u);
-            bool isEnabled = errorCode != 22;
 
             var vidM = VidRx.Match(instanceId);
             var pidM = PidRx.Match(instanceId);
@@ -306,6 +317,13 @@ public sealed class DeviceEnumerator(VidResolver resolver)
                 ? $"{vid}_{pid}_{miMatch.Groups[1].Value.ToUpperInvariant()}"
                 : null;
             usbFunctions.TryGetValue(usbKey ?? "", out var altId);
+
+            // ConfigManagerErrorCode 22 = CM_PROB_DISABLED (clean disable via Device Manager).
+            // Some drivers (e.g. MOZA) disable via the USB function node and return exit 3010
+            // (reboot-required), so the HID child never gets code 22 — its parent's ConfigFlags
+            // is the authoritative source. Check the altId first, then fall back to instanceId.
+            bool disabledByFlags = ReadConfigFlags(altId) == 1 || ReadConfigFlags(instanceId) == 1;
+            bool isEnabled = errorCode != 22 && !disabledByFlags;
 
             results.Add(new HidDevice
             {

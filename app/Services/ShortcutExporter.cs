@@ -1,4 +1,4 @@
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 public static class ShortcutExporter
 {
@@ -16,7 +16,7 @@ public static class ShortcutExporter
         shortcut.TargetPath       = appExe;
         shortcut.Arguments        = $"--launch {profileId}";
         shortcut.WorkingDirectory = Path.GetDirectoryName(appExe) ?? "";
-        shortcut.Description      = "Launch game via HID Reorder";
+        shortcut.Description      = "Launch game via Controller Manager";
 
         // Prefer the game's own icon; fall back to the app exe icon
         var iconSource = File.Exists(gameExePath) ? gameExePath : appExe;

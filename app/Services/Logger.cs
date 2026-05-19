@@ -1,6 +1,6 @@
-using HIDReorder.Models;
+using ControllerManager.Models;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 public static class Logger
 {
@@ -25,7 +25,7 @@ public static class Logger
     {
         _level = level;
         if (level != LogLevel.Off)
-            Write($"=== HIDReorder started {DateTime.Now:yyyy-MM-dd HH:mm:ss} (level={level}) ===");
+            Write($"=== ControllerManager started {DateTime.Now:yyyy-MM-dd HH:mm:ss} (level={level}) ===");
     }
 
     public static void Write(string message)

@@ -1,10 +1,10 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Input;
-using HIDReorder.Models;
-using HIDReorder.Services;
+using ControllerManager.Models;
+using ControllerManager.Services;
 
-namespace HIDReorder.ViewModels;
+namespace ControllerManager.ViewModels;
 
 public sealed class DevicesViewModel : ViewModelBase, IDisposable
 {
@@ -75,7 +75,7 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
         {
             if (Devices.Count == 0) return;
             var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"HID Reorder — Device Dump  ({DateTime.Now:yyyy-MM-dd HH:mm:ss})");
+            sb.AppendLine($"Controller Manager — Device Dump  ({DateTime.Now:yyyy-MM-dd HH:mm:ss})");
             sb.AppendLine(new string('-', 80));
             foreach (var d in Devices)
                 sb.AppendLine($"{(d.IsEnabled ? "ON " : "OFF")}  {d.VidPid,-22}  {d.FriendlyName,-55}  {d.InstanceId}");

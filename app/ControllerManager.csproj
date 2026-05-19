@@ -7,8 +7,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <RootNamespace>HIDReorder</RootNamespace>
-    <AssemblyName>HIDReorder</AssemblyName>
+    <RootNamespace>ControllerManager</RootNamespace>
+    <AssemblyName>ControllerManager</AssemblyName>
     <Platforms>x64</Platforms>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>app.ico</ApplicationIcon>

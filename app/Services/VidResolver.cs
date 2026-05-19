@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 public sealed class VidResolver
 {

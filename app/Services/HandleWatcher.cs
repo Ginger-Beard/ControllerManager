@@ -1,8 +1,8 @@
 using System.Runtime.InteropServices;
-using HIDReorder.Models;
-using HIDReorder.Native;
+using ControllerManager.Models;
+using ControllerManager.Native;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 /// <summary>
 /// Polls a target process's handle table every 100ms and emits an event

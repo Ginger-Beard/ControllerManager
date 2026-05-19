@@ -1,8 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using HIDReorder.Models;
+using ControllerManager.Models;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 /// <summary>
 /// Persists which devices we disabled. Written before each disable, cleared after each

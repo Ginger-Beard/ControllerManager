@@ -1,12 +1,12 @@
 using System.Diagnostics;
 using System.Text.Json;
-using HIDReorder.Models;
+using ControllerManager.Models;
 
-namespace HIDReorder.Services;
+namespace ControllerManager.Services;
 
 public sealed class SettingsStore(string path)
 {
-    private const string TaskName = "HIDReorder_Startup";
+    private const string TaskName = "ControllerManager_Startup";
     private static readonly JsonSerializerOptions Opts = new() { WriteIndented = true };
 
     public AppSettings Load()

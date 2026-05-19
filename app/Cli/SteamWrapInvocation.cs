@@ -1,13 +1,13 @@
 using System.Diagnostics;
-using HIDReorder.Services;
+using ControllerManager.Services;
 
-namespace HIDReorder.Cli;
+namespace ControllerManager.Cli;
 
 /// <summary>
 /// Handles --steam-wrap &lt;profileId&gt; -- &lt;game args...&gt;
 ///
 /// Usage in Steam Launch Options:
-///   "C:\path\HIDReorder.exe" --steam-wrap {profileId} -- %command%
+///   "C:\path\ControllerManager.exe" --steam-wrap {profileId} -- %command%
 ///
 /// Flow:
 ///   1. Disable profile devices (DisableThenRestore + KeepDisabled)

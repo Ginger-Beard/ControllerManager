@@ -1,6 +1,7 @@
-# TODO — HID Reorder
+# TODO — Controller Manager
 
 Reference this at the start of any session continuing work on this project.
+Also reference **CRITERIA.md** for agreed UX requirements on the HidHide integration.
 
 ---
 
@@ -25,8 +26,8 @@ HandleWatcher detects this by watching the game process for `\REGISTRY\...\Direc
 
 ## Launch paths
 
-1. **Steam wrapper** — `"HIDReorder.exe" --steam-wrap <profileId> -- %command%` in Launch Options
-2. **Shortcut** — `.lnk` pointing to `HIDReorder.exe --launch <profileId>`
+1. **Steam wrapper** — `"ControllerManager.exe" --steam-wrap <profileId> -- %command%` in Launch Options
+2. **Shortcut** — `.lnk` pointing to `ControllerManager.exe --launch <profileId>`
 3. **In-app Launch button** — Dashboard tab
 4. **Process watcher** — background safety net
 
@@ -45,7 +46,7 @@ HandleWatcher detects this by watching the game process for `\REGISTRY\...\Direc
 9. ✅ Steam wrapper (--steam-wrap CLI, disable→spawn game→wait→restore)
 10. ✅ Process watcher (500ms poll, auto-triggers on game launch)
 11. ✅ Shortcut export (WScript.Shell .lnk, Desktop + Start Menu buttons in Games tab)
-12. ✅ Single-instance + named pipe IPC (mutex, \\.\pipe\HIDReorder, --launch forwarding)
+12. ✅ Single-instance + named pipe IPC (mutex, \\.\pipe\ControllerManager, --launch forwarding)
 13. ✅ Settings tab (Start with Windows, process watcher toggle, logging level, pin to top)
 14. ✅ System tray icon + per-profile quick-launch from tray
 15. ✅ File logging with Off/Normal/Verbose levels
@@ -55,8 +56,8 @@ HandleWatcher detects this by watching the game process for `\REGISTRY\...\Direc
 ## Backlog
 
 ### UAC / Steam integration
-- Steam command triggers a UAC prompt on every launch because HIDReorder.exe has
-  `requireAdministrator` in its manifest. If HIDReorder is already running in the tray,
+- Steam command triggers a UAC prompt on every launch because ControllerManager.exe has
+  `requireAdministrator` in its manifest. If Controller Manager is already running in the tray,
   the second instance still needs to elevate to forward IPC, then exits — still prompts.
   Fix: create a Scheduled Task set to "Run with highest privileges" and have the Steam
   command trigger the task instead of the exe directly. No UAC prompt if user is already
@@ -83,8 +84,8 @@ Profile setup:
   - The virtual controller is only present while a session is active, so build the profile
     with a client connected
 Trigger setup: use Sunshine's "Command Preparations" in its web UI — put
-`"C:\path\to\HIDReorder.exe" --launch <profileId>` in the cmd (blocking) field so
-HIDReorder disables physical controllers before the game launches. On app exit, Sunshine
+`"C:\path\to\ControllerManager.exe" --launch <profileId>` in the cmd (blocking) field so
+Controller Manager disables physical controllers before the game launches. On app exit, Sunshine
 has a "Detach Command" field — put the same `--launch` there or rely on process watcher
 to re-enable on game exit. Works the same way for Apollo (same web UI structure as a
 Sunshine fork).
@@ -169,23 +170,110 @@ Sunshine fork).
   visualization and X/Y scatter plot are still backlog
 - need to add: joystick visuals, controller triggers aren't showing up right
 
-### Companion software handle conflict
-- When a device's companion app (MOZA Pit House, Razer Synapse, Logitech GHub, etc.) holds
-  an open handle to the HID device, Windows returns ERROR_NOT_SUPPORTED and refuses to
-  disable it. Some drivers (MOZA Windows Driver) also have a buggy disable path that
-  partially executes before returning an error, leaving the device in a disabled state.
-- Current behaviour: disable fails cleanly with an error shown in the status bar. The
-  composite USB root is never touched (fixed), so no collateral damage to other devices.
-- **Planned fix: dynamic handle detection**
-  - When disable returns ERROR_NOT_SUPPORTED, call NtQuerySystemInformation(SystemHandleInformation)
-    to enumerate all open handles system-wide and match against the device's interface path
-    (already stored in DeviceInterfacePath). This is the same technique Process Explorer uses
-    to show "which process has this file locked" — fully dynamic, zero per-device mapping.
-  - Show a prompt: "MOZA Pit House is holding this device open. Close it to disable?"
-  - User confirms → kill/suspend that process → retry disable → optionally restart the process.
-  - We already have NtQueryInformationProcess infrastructure in HandleWatcher; extend it to
-    NtQuerySystemInformation for system-wide handle enumeration.
-  - Applies generically to any device with any companion software, no maintenance required.
+### MOZA driver / pnputil disable behaviour (investigated 2026-05-18)
+The real failure mode for the MOZA wheel is NOT a companion software handle conflict —
+it is the MOZA Windows Driver returning **exit 3010** (ERROR_SUCCESS_REBOOT_REQUIRED) on
+`pnputil /disable-device`. Tested with Pit House + SimHub both open; made no difference.
+
+What exit 3010 actually means:
+- The driver cannot fully stop its stack (it holds internal state / open handles)
+- BUT: `ConfigFlags=1` is written to the registry immediately, and the HID interface
+  disappears from DirectInput right away — the device IS invisible to games
+- The driver fully unloads on next reboot
+
+Current workaround in `DeviceController.cs`:
+- **Disable**: exit 3010 and exit 50 "pending system reboot" with ConfigFlags=1 both
+  treated as success — device is already invisible
+- **Enable**: exit 50 "pending system reboot" falls back to clearing ConfigFlags=0 in
+  the registry + `pnputil /scan-devices` to re-enumerate without a reboot
+- **IsEnabled in DeviceEnumerator**: checks ConfigFlags from registry in addition to WMI
+  ConfigManagerErrorCode=22, so the Devices tab toggle reflects reality after a 3010
+
+Known remaining limitation with pnputil backend:
+- After a ClearConfigFlags+scan restore, the MOZA driver's internal pending state
+  survives. A second disable in the same session hits exit 50 with ConfigFlags=0 —
+  pnputil cannot disable the device again until a full reboot. The Devices tab will
+  show an error "The driver did not release its pending state after recovery. Reboot
+  Windows to restore normal operation." This is a fundamental MOZA driver limitation,
+  not fixable in userspace. **The HidHide backend (see below) eliminates this entirely.**
+
+### HidHide integration — preferred device-hiding backend ⬅ START HERE next session
+**Why**: pnputil disable/enable is a system-wide PnP operation. The MOZA Windows Driver
+makes it unreliable (exit 3010, pending state, reboot required between cycles). The right
+fix is a kernel filter driver that intercepts at the file-open level instead.
+
+**Decision: use HidHide as-is, no driver modification needed.**
+- HidHide (github.com/nefarius/HidHide) is an MIT-licensed, pre-signed WDF filter driver
+- It sits above the HID class driver and returns STATUS_ACCESS_DENIED on device file opens
+  for processes that shouldn't see a device — no PnP disable, no pending state, no reboot
+- All allow/deny list changes are **fully runtime** — verified from source (Logic.c:863-931):
+  `SetWhitelist()` and `SetBlacklist()` update the in-memory collection under a lock and
+  flush the evaluation cache immediately, no driver restart required
+- Session blacklist (`IOCTL_ADD_SESSION_BLACKLIST`, Logic.c:591) is purely in-memory and
+  auto-cleans when our process exits — cleaner than state.json for failsafe recovery
+
+**How hiding works** (Logic.c:155-248 `OnDeviceFileCreate`):
+- When any process tries to open a HID device file, the driver checks:
+  1. Is the device blacklisted?
+  2. Is the calling process on the whitelist?
+- If blacklisted and not whitelisted → STATUS_ACCESS_DENIED
+- The device still appears in Device Manager and GetRawInputDeviceList — it's not
+  removed from enumeration, just inaccessible. DirectInput skips devices it can't open.
+
+**Startup timing**: works for Forza's ~30ms DirectInput burst. Rules are set before
+game launch. Game process starts, loads image, tries to open HID device → ACCESS_DENIED
+from the very first attempt. Verified: driver hooks PsSetLoadImageNotifyRoutine so the
+check is in place from the moment the process image loads (Config.c).
+
+**Per-game profile workflow** (no driver modification required):
+1. HidHide installed as a prerequisite (MSI from nefarius/HidHide releases)
+2. User adds companion apps (Pit House, SimHub) to HidHide whitelist once — they always
+   keep access regardless of what's in the blacklist
+3. Before game launch → `IOCTL_ADD_SESSION_BLACKLIST` with profile's device instance paths
+4. Launch game → game gets ACCESS_DENIED on those devices, never sees them
+5. Game exits → `IOCTL_CLR_SESSION_BLACKLIST` or auto-cleans when our process exits
+6. Different profile next session → different devices in session blacklist
+
+**IOCTL interface** (Shared/HidHideIoctlContract.h):
+- Control device path: `\\.\HidHide`
+- `IOCTL_GET/SET_WHITELIST` (0x8FF80800/04) — persistent, full image paths, multi-string
+- `IOCTL_GET/SET_BLACKLIST` (0x8FF80808/0C) — persistent, device instance paths, multi-string
+- `IOCTL_GET/SET_ACTIVE`    (0x8FF80810/14) — BOOLEAN on/off
+- `IOCTL_ADD_SESSION_BLACKLIST` (0x8FF80820) — in-memory, auto-cleans on our exit
+- `IOCTL_CLR_SESSION_BLACKLIST` (0x8FF80824) — explicit clear
+- All data as REG_MULTI_SZ (null-separated, double-null terminated wide strings)
+- C++ wrapper reference: HidHideCLI/src/FilterDriverProxy.cpp
+
+**What to build**:
+1. `HidHideClient.cs` service — `DeviceIoControl` P/Invoke wrapper, multi-string
+   serialisation, typed methods for each IOCTL. Detect driver presence by attempting
+   to open `\\.\HidHide` — gracefully absent if HidHide not installed.
+2. `IDeviceHider` interface — abstract over pnputil vs HidHide so both backends coexist.
+   HidHide preferred when available, pnputil fallback for users who haven't installed it.
+3. `LaunchOrchestrator` integration — replace `DeviceController.SetEnabled(false)` calls
+   with `HidHideClient.AddSessionBlacklist(profileDevices)` before launch, and
+   `HidHideClient.ClearSessionBlacklist()` on game exit. HandleWatcher re-enable
+   sequencing is no longer needed for HidHide-managed devices.
+4. Settings tab — "HidHide detected ✓ / Not installed (download)" status indicator.
+   Link to HidHide MSI. Button to open whitelist manager (companion app configuration).
+5. Whitelist manager UI — list of processes allowed to see all devices regardless of
+   profile. Pre-populate with common companion apps (Pit House, SimHub, GHub, Synapse).
+
+**What to remove when HidHide is the backend**:
+- `ClearConfigFlagsAndScan()` in DeviceController.cs — the ConfigFlags+scan workaround
+- `ReadConfigFlags()` in DeviceController.cs and DeviceEnumerator.cs
+- The exit 3010 / exit 50 special-case handling in `RunPnpCommandWithFallback`
+- ConfigFlags-based `isEnabled` override in DeviceEnumerator.cs
+- Keep pnputil path as fallback for users without HidHide
+
+**Driver modification considered and deferred**:
+Adding per-target-process hiding (hide device only from Game A, not Game B) to the
+session blacklist would require ~70 lines of C in the kernel driver (Logic.h:56,
+Logic.c:794, 828, 658, 730). Feasible. Would open a PR to nefarius/HidHide — he
+declined a similar feature request in Discussion #60 but that was about redesigning
+the main whitelist; extending the session blacklist is incremental (follows PR #201).
+Not needed for the core use case (one game at a time). Defer until unmodified HidHide
+is working end-to-end.
 
 ### Code quality
 - Code scan / review pass — check for dead code, obvious issues, security concerns
@@ -197,7 +285,7 @@ Sunshine fork).
 ## Known limitations
 
 - HandleWatcher uses `NtQueryInformationProcess` (class 51) which requires `PROCESS_QUERY_INFORMATION` — works as admin
-- Steam wrapper keeps a process alive for playtime tracking; if HIDReorder crashes mid-wrap, devices may stay disabled until next launch (state.json recovery handles this)
+- Steam wrapper keeps a process alive for playtime tracking; if Controller Manager crashes mid-wrap, devices may stay disabled until next launch (state.json recovery handles this)
 - Process watcher has a race window — prefer Steam wrapper or shortcut for timing-sensitive games
 - Shortcut icon extraction works for non-UWP games only (direct .exe path)
 - Steam command requires UAC prompt on each launch unless Scheduled Task workaround is used
