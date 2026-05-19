@@ -406,10 +406,9 @@
                               Margin="0,0,0,8"
                               ToolTip="Launch silently in the system tray. Double-click the tray icon to open the window."/>
 
-                    <CheckBox Content="Enable process watcher"
-                              IsChecked="{Binding ProcessWatcherEnabled}"
-                              Margin="0,0,0,8"
-                              ToolTip="Polls every 500ms for configured game executables and triggers the profile flow automatically when detected. Disable if you always launch via the in-app button, Steam command, or shortcut."/>
+                    <TextBlock Foreground="Gray" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0">
+                        Auto-trigger on game launch is set per-profile in the Games tab.
+                    </TextBlock>
 
                     <Separator Margin="0,8,0,12"/>
 

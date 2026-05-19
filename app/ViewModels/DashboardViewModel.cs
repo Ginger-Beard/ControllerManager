@@ -10,7 +10,12 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
 {
     private readonly LaunchOrchestrator         _orchestrator;
     private readonly ProfileStore               _profileStore;
-    private readonly ObservableCollection<HidDevice> _liveDevices;
+    private readonly DeviceEnumerator           _enumerator;
+    // Snapshot of gaming-class HID devices for the columns. Refreshed when the
+    // session state changes or the shared device list is updated by the Devices tab.
+    // Filtered to gaming devices only — Dashboard always reflects what a game would
+    // care about, regardless of the Devices tab "Show all devices" toggle.
+    private List<HidDevice>                     _gamingDevices = [];
 
     private Profile? _selectedProfile;
     private string   _statusText       = "Ready.";
@@ -69,11 +74,16 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
     public ICommand CopyLogCommand { get; }
 
     public DashboardViewModel(LaunchOrchestrator orchestrator, ProfileStore profileStore,
-                              ObservableCollection<HidDevice> liveDevices)
+                              ObservableCollection<HidDevice> sharedDeviceList,
+                              DeviceEnumerator enumerator)
     {
         _orchestrator = orchestrator;
         _profileStore = profileStore;
-        _liveDevices  = liveDevices;
+        _enumerator   = enumerator;
+
+        // Refresh our local gaming-only snapshot whenever the upstream list changes
+        // (devices plugged/unplugged, or the Devices tab manually refreshes).
+        sharedDeviceList.CollectionChanged += (_, _) => RefreshGamingDevices();
 
         LaunchCommand = new RelayCommand(
             _ => Launch(),
@@ -94,7 +104,20 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
         _orchestrator.ActivityLogged += OnActivityLogged;
 
         RefreshProfiles();
-        RefreshDeviceLists();
+        RefreshGamingDevices();
+    }
+
+    private void RefreshGamingDevices()
+    {
+        Task.Run(() =>
+        {
+            var list = _enumerator.GetAll(showAllHid: false);
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                _gamingDevices = list;
+                RefreshDeviceLists();
+            });
+        });
     }
 
     public void RefreshProfiles()
@@ -145,7 +168,7 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
     }
 
     /// <summary>
-    /// Rebuilds the System and Game device columns from the live device list
+    /// Rebuilds the System and Game device columns from our gaming-only snapshot
     /// and the current HidHide blacklist state.
     /// </summary>
     public void RefreshDeviceLists()
@@ -159,7 +182,7 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var session = App.HidHide.SessionBlacklistIds;
 
-        foreach (var d in _liveDevices)
+        foreach (var d in _gamingDevices)
         {
             // System: visible to all processes — not in persistent blacklist.
             if (!persistent.Contains(d.InstanceId))

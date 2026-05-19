@@ -14,13 +14,17 @@ public sealed class MainViewModel : ViewModelBase
 
     public MainViewModel()
     {
-        var orchestrator   = App.Orchestrator;
-        var processWatcher = new ProcessWatcher(App.ProfileStore, orchestrator);
+        var orchestrator = App.Orchestrator;
+        var enumerator   = new DeviceEnumerator();
 
-        Devices   = new DevicesViewModel(new DeviceEnumerator(), App.HidHide);
+        Devices   = new DevicesViewModel(enumerator, App.HidHide);
         Games     = new GamesViewModel(App.ProfileStore, Devices);
-        Dashboard = new DashboardViewModel(orchestrator, App.ProfileStore, Devices.Devices);
+        Dashboard = new DashboardViewModel(orchestrator, App.ProfileStore, Devices.Devices, enumerator);
         Settings  = new SettingsViewModel(App.SettingsStore);
+
+        // ProcessWatcher always runs — per-profile flags (Profile.ProcessWatcherEnabled)
+        // gate individual profiles, no global on/off needed.
+        var processWatcher = new ProcessWatcher(App.ProfileStore, orchestrator);
 
         orchestrator.StateChanged += (_, state) =>
         {
@@ -35,8 +39,7 @@ public sealed class MainViewModel : ViewModelBase
             });
         };
 
-        if (App.Settings.ProcessWatcherEnabled)
-            processWatcher.Start();
+        processWatcher.Start();
 
         App.Ipc?.RequestReceived += (_, req) =>
         {
@@ -51,6 +54,11 @@ public sealed class MainViewModel : ViewModelBase
             {
                 _ = Task.Run(() => SteamWrapInvocation.HandleAsync(
                     req.Args, App.HidHide, App.ProfileStore));
+            }
+            else if (req.Op == "show")
+            {
+                System.Windows.Application.Current.Dispatcher.Invoke(
+                    () => App.Tray?.ShowWindow());
             }
         };
     }

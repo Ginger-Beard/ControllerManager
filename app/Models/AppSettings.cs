@@ -13,9 +13,6 @@ public sealed class AppSettings
     [JsonPropertyName("startMinimized")]
     public bool StartMinimized { get; set; }
 
-    [JsonPropertyName("processWatcherEnabled")]
-    public bool ProcessWatcherEnabled { get; set; } = true;
-
     [JsonPropertyName("logLevel")]
     public LogLevel LogLevel { get; set; } = LogLevel.Normal;
 

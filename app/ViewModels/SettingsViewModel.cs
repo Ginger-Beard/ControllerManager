@@ -12,7 +12,6 @@ public sealed class SettingsViewModel : ViewModelBase
 
     private bool     _startWithWindows;
     private bool     _startMinimized;
-    private bool     _processWatcherEnabled;
     private LogLevel _logLevel;
     private bool     _alwaysOnTop;
 
@@ -26,12 +25,6 @@ public sealed class SettingsViewModel : ViewModelBase
     {
         get => _startMinimized;
         set { Set(ref _startMinimized, value); Save(); }
-    }
-
-    public bool ProcessWatcherEnabled
-    {
-        get => _processWatcherEnabled;
-        set { Set(ref _processWatcherEnabled, value); Save(); }
     }
 
     public LogLevel LogLevel
@@ -64,11 +57,10 @@ public sealed class SettingsViewModel : ViewModelBase
         _store    = store;
         _settings = store.Load();
 
-        _startWithWindows      = SettingsStore.GetStartWithWindows();
-        _startMinimized        = _settings.StartMinimized;
-        _processWatcherEnabled = _settings.ProcessWatcherEnabled;
-        _logLevel              = _settings.LogLevel;
-        _alwaysOnTop           = _settings.AlwaysOnTop;
+        _startWithWindows = SettingsStore.GetStartWithWindows();
+        _startMinimized   = _settings.StartMinimized;
+        _logLevel         = _settings.LogLevel;
+        _alwaysOnTop      = _settings.AlwaysOnTop;
 
         OpenLogFolderCommand = new RelayCommand(_ =>
         {
@@ -87,11 +79,10 @@ public sealed class SettingsViewModel : ViewModelBase
 
     private void Save()
     {
-        _settings.StartWithWindows      = _startWithWindows;
-        _settings.StartMinimized        = _startMinimized;
-        _settings.ProcessWatcherEnabled = _processWatcherEnabled;
-        _settings.LogLevel              = _logLevel;
-        _settings.AlwaysOnTop           = _alwaysOnTop;
+        _settings.StartWithWindows = _startWithWindows;
+        _settings.StartMinimized   = _startMinimized;
+        _settings.LogLevel         = _logLevel;
+        _settings.AlwaysOnTop      = _alwaysOnTop;
         _store.Save(_settings);
         App.Settings = _settings;
     }

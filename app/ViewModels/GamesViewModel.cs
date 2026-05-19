@@ -93,6 +93,15 @@ public sealed class GamesViewModel : ViewModelBase
         DeleteProfileCommand = new RelayCommand(_ =>
         {
             if (_selectedProfile is null) return;
+
+            var confirm = MessageBox.Show(
+                $"Delete profile \"{_selectedProfile.Name}\"?\n\nThis cannot be undone.",
+                "Controller Manager",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning,
+                MessageBoxResult.Cancel);
+            if (confirm != MessageBoxResult.OK) return;
+
             _profiles.Remove(_selectedProfile);
             Profiles.Remove(_selectedProfile);
             SelectedProfile = Profiles.FirstOrDefault();

@@ -69,6 +69,13 @@ public partial class App : Application
                 return;
             }
 
+            // --startup is set by the scheduled task created by "Start with Windows".
+            // Without it, the user launched the app directly (Start menu, double-click,
+            // pinned shortcut, etc.) — always show the window in that case, regardless
+            // of the "Start minimized to tray" setting (which only applies at boot).
+            bool launchedAtStartup = args.Any(a =>
+                a.Equals("--startup", StringComparison.OrdinalIgnoreCase));
+
             // ── Shared services ──────────────────────────────────────────────
             var appData = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -105,7 +112,7 @@ public partial class App : Application
             var window = new Views.MainWindow();
             Tray = new Services.TrayService(window, ProfileStore, Orchestrator);
 
-            if (Settings.StartMinimized)
+            if (launchedAtStartup && Settings.StartMinimized)
                 Tray.HideToTray();
             else
                 window.Show();
@@ -120,12 +127,19 @@ public partial class App : Application
 
     private static void ForwardToRunningInstance(string[] args)
     {
-        if (args.Length == 0) return;
+        // No args = user re-launched the exe (Start menu, double-click, etc.) — tell
+        // the running instance to surface its window.
+        if (args.Length == 0)
+        {
+            IpcClient.SendAsync(new IpcRequest { Op = "show" }).Wait(3000);
+            return;
+        }
 
         var req = args[0] switch
         {
             "--launch"     => new IpcRequest { Op = "launch",     Args = args[1..] },
             "--steam-wrap" => new IpcRequest { Op = "steam-wrap", Args = args[1..] },
+            // --startup from a duplicate scheduled-task trigger — ignore silently
             _              => null,
         };
 

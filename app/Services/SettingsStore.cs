@@ -38,7 +38,9 @@ public sealed class SettingsStore(string path)
 
                 // Create a scheduled task that runs elevated at logon with no UAC prompt.
                 // /RL HIGHEST = "Run with highest privileges"; /IT = only when user is logged on.
-                RunSchtasks($"/Create /F /TN \"{TaskName}\" /TR \"\\\"{exe}\\\"\" " +
+                // --startup arg tells the app this launch came from boot, so "Start minimized
+                // to tray" only applies here (manual launches always show the window).
+                RunSchtasks($"/Create /F /TN \"{TaskName}\" /TR \"\\\"{exe}\\\" --startup\" " +
                             $"/SC ONLOGON /RL HIGHEST /IT /DELAY 0000:10");
             }
             else

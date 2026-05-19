@@ -35,9 +35,27 @@
 
         <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" Background="#DDD"/>
 
-        <!-- ── Profile editor ────────────────────────────────── -->
-        <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
-            <StackPanel Margin="12" IsEnabled="{Binding HasSelection}">
+        <!-- ── Profile editor ──────────────────────────────────
+             Outer layout is a Grid (not ScrollViewer + StackPanel) so the two
+             device lists can share a Star-sized middle row that grows with the
+             window. A horizontal GridSplitter between them lets the user
+             redistribute space without resizing the whole window.            -->
+        <Grid Grid.Column="2" Margin="12" IsEnabled="{Binding HasSelection}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>   <!-- name + exe + auto-trigger + pause -->
+                <RowDefinition Height="Auto"/>   <!-- separator -->
+                <RowDefinition Height="Auto"/>   <!-- "Devices in this profile" label -->
+                <RowDefinition Height="2*" MinHeight="100"/>   <!-- Assignments list -->
+                <RowDefinition Height="6"/>      <!-- splitter -->
+                <RowDefinition Height="Auto"/>   <!-- Picker label + show-all -->
+                <RowDefinition Height="*" MinHeight="80"/>     <!-- Picker list -->
+                <RowDefinition Height="Auto"/>   <!-- Add buttons -->
+                <RowDefinition Height="Auto"/>   <!-- separator -->
+                <RowDefinition Height="Auto"/>   <!-- actions row -->
+            </Grid.RowDefinitions>
+
+            <!-- ── Top: name + exe + toggles ──────────────────────────────── -->
+            <StackPanel Grid.Row="0">
 
                 <!-- Name + exe -->
                 <Grid Margin="0,0,0,10">
@@ -67,9 +85,17 @@
                     </DockPanel>
                 </Grid>
 
-                <!-- Pause before first reveal -->
+                <!-- Auto-trigger toggle (per-profile) -->
+                <CheckBox Content="Auto-trigger this profile when the game launches"
+                          IsChecked="{Binding Editor.ProcessWatcherEnabled}"
+                          Margin="0,0,0,8"
+                          ToolTip="When on, Controller Manager will detect the game starting and apply this profile automatically. When off, you must launch via the Dashboard, a shortcut, or the Steam wrapper."/>
+
+                <!-- Pause before first reveal — only meaningful when there are RevealAfterStart devices -->
                 <DockPanel Margin="0,0,0,10"
-                           ToolTip="Extra wait after the game opens its first device, before the reveal sequence starts. 0 = start immediately.">
+                           Visibility="{Binding Editor.HasRevealAfterStart,
+                               Converter={StaticResource BoolVisConverter}}"
+                           ToolTip="Wait this long after the game launches before revealing the Reveal-After-Start devices. 5s default gives FFB-sensitive games (Forza, etc.) time to assign slot #1 to the wheel before pedals/shifter appear.">
                     <Label DockPanel.Dock="Left" Content="Pause before first reveal:"
                            VerticalAlignment="Center"/>
                     <Label DockPanel.Dock="Right" Content="s"
@@ -79,148 +105,193 @@
                     <Slider Minimum="0" Maximum="30" TickFrequency="1"
                             Value="{Binding Editor.InitialDelaySeconds}" Margin="0,0,6,0"/>
                 </DockPanel>
+            </StackPanel>
 
-                <Separator Margin="0,0,0,10"/>
+            <Separator Grid.Row="1" Margin="0,0,0,10"/>
 
-                <!-- Devices in this profile -->
-                <Label Content="Devices in this profile" FontWeight="SemiBold" Padding="0,0,0,4"/>
-                <Border BorderBrush="#CCC" BorderThickness="1" Height="180">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{Binding Editor.Assignments}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate DataType="{x:Type vm:DeviceAssignmentViewModel}">
-                                    <Grid Margin="4,3">
+            <!-- ── Assignments label ──────────────────────────────────────── -->
+            <Label Grid.Row="2" Content="Devices in this profile"
+                   FontWeight="SemiBold" Padding="0,0,0,4"/>
+
+            <!-- ── Assignments list (resizable, drag-drop reorderable) ────── -->
+            <Border Grid.Row="3" BorderBrush="#CCC" BorderThickness="1">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              AllowDrop="True"
+                              DragOver="AssignmentRow_DragOver"
+                              Drop="AssignmentsHost_Drop">
+                    <ItemsControl ItemsSource="{Binding Editor.Assignments}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:DeviceAssignmentViewModel}">
+                                <!-- Whole row is a drop target; drag handle ☰ is the drag source -->
+                                <Border Background="Transparent" Margin="0" Padding="4,3"
+                                        AllowDrop="True"
+                                        DragOver="AssignmentRow_DragOver"
+                                        Drop="AssignmentRow_Drop">
+                                    <Grid>
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>  <!-- ☰ drag handle -->
+                                            <ColumnDefinition Width="*"/>     <!-- name -->
+                                            <ColumnDefinition Width="64"/>    <!-- delay -->
+                                            <ColumnDefinition Width="Auto"/>  <!-- role -->
+                                            <ColumnDefinition Width="Auto"/>  <!-- ↑ -->
+                                            <ColumnDefinition Width="Auto"/>  <!-- ↓ -->
+                                            <ColumnDefinition Width="Auto"/>  <!-- ✕ -->
                                         </Grid.ColumnDefinitions>
 
-                                        <TextBlock Grid.Column="0"
+                                        <!-- Drag handle: click and drag to reorder -->
+                                        <Border Grid.Column="0" Width="20" Background="Transparent"
+                                                Cursor="SizeAll"
+                                                VerticalAlignment="Stretch"
+                                                HorizontalAlignment="Center"
+                                                Margin="0,0,4,0"
+                                                ToolTip="Drag to reorder"
+                                                PreviewMouseLeftButtonDown="DragHandle_PreviewMouseLeftButtonDown"
+                                                PreviewMouseMove="DragHandle_PreviewMouseMove">
+                                            <TextBlock Text="☰" FontSize="14" Foreground="#888"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"/>
+                                        </Border>
+
+                                        <TextBlock Grid.Column="1"
                                                    Text="{Binding FriendlyName}"
                                                    VerticalAlignment="Center"
                                                    TextTrimming="CharacterEllipsis"
                                                    Margin="0,0,8,0"/>
 
-                                        <ComboBox Grid.Column="1"
-                                                  Width="130"
+                                        <!-- Delay field: visible only for RevealAfterStart; column reserves width either way -->
+                                        <StackPanel Grid.Column="2"
+                                                    Orientation="Horizontal"
+                                                    HorizontalAlignment="Right"
+                                                    Margin="0,0,6,0"
+                                                    VerticalAlignment="Center"
+                                                    Visibility="{Binding IsRevealAfterStart,
+                                                        Converter={StaticResource BoolVisConverter}}">
+                                            <TextBox Width="35" VerticalContentAlignment="Center"
+                                                     Text="{Binding DelaySeconds, UpdateSourceTrigger=PropertyChanged}"
+                                                     ToolTip="Seconds to wait after revealing this device, before revealing the next one"/>
+                                            <TextBlock Text="s" VerticalAlignment="Center" Margin="2,0,0,0"/>
+                                        </StackPanel>
+
+                                        <ComboBox Grid.Column="3"
+                                                  Width="140"
                                                   ItemsSource="{x:Static vm:DeviceAssignmentViewModel.AllRoles}"
                                                   SelectedValue="{Binding Role}"
                                                   SelectedValuePath="Role"
                                                   DisplayMemberPath="Name"
                                                   VerticalAlignment="Center"/>
 
-                                        <StackPanel Grid.Column="2"
-                                                    Orientation="Horizontal"
-                                                    Margin="6,0,0,0"
-                                                    VerticalAlignment="Center"
-                                                    Visibility="{Binding IsRevealAfterStart,
-                                                        Converter={StaticResource BoolVisConverter}}">
-                                            <TextBox Width="35" VerticalContentAlignment="Center"
-                                                     Text="{Binding DelaySeconds, UpdateSourceTrigger=PropertyChanged}"
-                                                     ToolTip="Seconds to wait after revealing this device"/>
-                                            <TextBlock Text="s" VerticalAlignment="Center" Margin="2,0,0,0"/>
-                                        </StackPanel>
-
-                                        <Button Grid.Column="3" Content="↑" Width="22" Margin="6,0,0,0"
+                                        <Button Grid.Column="4" Content="↑" Width="22" Margin="6,0,0,0"
                                                 Command="{Binding DataContext.Editor.MoveUpCommand,
                                                     RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding}"
-                                                ToolTip="Move up"/>
-                                        <Button Grid.Column="4" Content="↓" Width="22" Margin="2,0,0,0"
+                                                ToolTip="Move up — affects reveal order during launch"/>
+                                        <Button Grid.Column="5" Content="↓" Width="22" Margin="2,0,0,0"
                                                 Command="{Binding DataContext.Editor.MoveDownCommand,
                                                     RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding}"
-                                                ToolTip="Move down"/>
-                                        <Button Grid.Column="5" Content="✕" Width="22" Margin="2,0,0,0"
+                                                ToolTip="Move down — affects reveal order during launch"/>
+                                        <Button Grid.Column="6" Content="✕" Width="22" Margin="2,0,0,0"
                                                 Command="{Binding DataContext.Editor.RemoveCommand,
                                                     RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding}"
                                                 ToolTip="Remove from profile"/>
                                     </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                </Border>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
 
-                <!-- Detected device picker -->
-                <DockPanel Margin="0,12,0,2">
-                    <CheckBox DockPanel.Dock="Right"
-                              Content="Show all devices"
-                              IsChecked="{Binding Editor.ShowAllHid}"
-                              VerticalAlignment="Center"
-                              Margin="8,0,0,0"/>
-                    <TextBlock>
-                        <Run Text="Add devices to profile"/>
-                        <Run Text=" — devices not listed here are hidden from this game"
-                             Foreground="#888" FontStyle="Italic"/>
-                    </TextBlock>
-                </DockPanel>
-                <ListBox ItemsSource="{Binding Editor.UnassignedDevices}"
-                         SelectedItem="{Binding Editor.SelectedAvailable}"
-                         DisplayMemberPath="FriendlyName"
-                         Height="110"
-                         BorderThickness="1" BorderBrush="#CCC"
-                         Margin="0,0,0,6"/>
+            <!-- ── Splitter between the two lists ─────────────────────────── -->
+            <GridSplitter Grid.Row="4"
+                          Height="6"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Center"
+                          Background="#EEE"
+                          ResizeBehavior="PreviousAndNext"
+                          ResizeDirection="Rows"
+                          ToolTip="Drag to resize the lists above and below"/>
 
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                    <Button Content="+ Add to profile"
-                            Command="{Binding Editor.AddCommand}"
-                            Padding="8,3"/>
+            <!-- ── Picker label + show-all ────────────────────────────────── -->
+            <DockPanel Grid.Row="5" Margin="0,4,0,2">
+                <CheckBox DockPanel.Dock="Right"
+                          Content="Show all devices"
+                          IsChecked="{Binding Editor.ShowAllHid}"
+                          VerticalAlignment="Center"
+                          Margin="8,0,0,0"/>
+                <TextBlock>
+                    <Run Text="Add devices to profile"/>
+                    <Run Text=" — devices not listed here are hidden from this game"
+                         Foreground="#888" FontStyle="Italic"/>
+                </TextBlock>
+            </DockPanel>
+
+            <!-- ── Picker list (resizable) ────────────────────────────────── -->
+            <ListBox Grid.Row="6"
+                     ItemsSource="{Binding Editor.UnassignedDevices}"
+                     SelectedItem="{Binding Editor.SelectedAvailable}"
+                     DisplayMemberPath="FriendlyName"
+                     BorderThickness="1" BorderBrush="#CCC"
+                     Margin="0,0,0,6"/>
+
+            <!-- ── Add buttons ────────────────────────────────────────────── -->
+            <StackPanel Grid.Row="7" Orientation="Horizontal" Margin="0,0,0,12">
+                <Button Content="+ Add to profile"
+                        Command="{Binding Editor.AddCommand}"
+                        Padding="8,3"/>
+                <Button Content="+ Add all"
+                        Command="{Binding Editor.AddAllCommand}"
+                        Padding="8,3" Margin="6,0,0,0"
+                        ToolTip="Add every device currently shown in the picker above. Respects the &quot;Show all devices&quot; toggle — only adds what's visible."/>
+            </StackPanel>
+
+            <Separator Grid.Row="8" Margin="0,0,0,8"/>
+
+            <!-- ── Actions row ────────────────────────────────────────────── -->
+            <DockPanel Grid.Row="9" Margin="0,0,0,12">
+
+                <!-- Save + unsaved indicator — docked right -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <TextBlock Text="Unsaved changes" Foreground="Orange"
+                               VerticalAlignment="Center" Margin="0,0,8,0"
+                               Visibility="{Binding Editor.IsDirty,
+                                   Converter={StaticResource BoolVisConverter}}"/>
+                    <Button Content="Save Profile"
+                            Command="{Binding SaveProfileCommand}"
+                            Padding="14,5" Background="#3CB371" Foreground="White"/>
                 </StackPanel>
 
-                <Separator Margin="0,0,0,8"/>
+                <!-- Left group: shortcuts + steam -->
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Command="{Binding CreateDesktopShortcutCommand}"
+                            Padding="8,4"
+                            ToolTip="Create a desktop shortcut that launches this profile directly">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🖥" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Desktop" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Command="{Binding CreateStartMenuShortcutCommand}"
+                            Padding="8,4" Margin="6,0,0,0"
+                            ToolTip="Add a shortcut to the Start Menu Programs folder">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="⊞" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Start Menu" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Command="{Binding CopySteamCommandCommand}"
+                            Padding="8,4" Margin="6,0,0,0"
+                            ToolTip="Copy the Steam Launch Options command.&#x0a;Paste into Steam → right-click game → Properties → Launch Options.">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🎮" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Copy Steam Command" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
 
-                <!-- Actions row: shortcuts + steam left, save right -->
-                <DockPanel Margin="0,0,0,12">
-
-                    <!-- Save + unsaved indicator — docked right -->
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
-                                VerticalAlignment="Center">
-                        <TextBlock Text="Unsaved changes" Foreground="Orange"
-                                   VerticalAlignment="Center" Margin="0,0,8,0"
-                                   Visibility="{Binding Editor.IsDirty,
-                                       Converter={StaticResource BoolVisConverter}}"/>
-                        <Button Content="Save Profile"
-                                Command="{Binding SaveProfileCommand}"
-                                Padding="14,5" Background="#3CB371" Foreground="White"/>
-                    </StackPanel>
-
-                    <!-- Left group: shortcuts + steam -->
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Command="{Binding CreateDesktopShortcutCommand}"
-                                Padding="8,4"
-                                ToolTip="Create a desktop shortcut that launches this profile directly">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="🖥" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="Desktop" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Button>
-                        <Button Command="{Binding CreateStartMenuShortcutCommand}"
-                                Padding="8,4" Margin="6,0,0,0"
-                                ToolTip="Add a shortcut to the Start Menu Programs folder">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="⊞" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="Start Menu" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Button>
-                        <Button Command="{Binding CopySteamCommandCommand}"
-                                Padding="8,4" Margin="6,0,0,0"
-                                ToolTip="Copy the Steam Launch Options command.&#x0a;Paste into Steam → right-click game → Properties → Launch Options.">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="🎮" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="Copy Steam Command" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Button>
-                    </StackPanel>
-
-                </DockPanel>
-
-            </StackPanel>
-        </ScrollViewer>
+            </DockPanel>
+        </Grid>
     </Grid>
 </UserControl>
