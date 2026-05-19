@@ -10,12 +10,13 @@ public partial class App : Application
 {
     private const string MutexName = "Global\\ControllerManager-3F8A1B2C-4D5E-6F7A-8B9C-0D1E2F3A4B5C";
 
-    public static ProfileStore  ProfileStore  { get; private set; } = null!;
-    public static SettingsStore SettingsStore { get; private set; } = null!;
-    public static AppSettings   Settings      { get; set; }         = null!;
-    public static HidHideClient HidHide       { get; private set; } = null!;
-    public static IpcServer?    Ipc           { get; private set; }
-    public static TrayService?  Tray          { get; private set; }
+    public static ProfileStore       ProfileStore  { get; private set; } = null!;
+    public static SettingsStore      SettingsStore { get; private set; } = null!;
+    public static AppSettings        Settings      { get; set; }         = null!;
+    public static HidHideClient      HidHide       { get; private set; } = null!;
+    public static LaunchOrchestrator Orchestrator  { get; private set; } = null!;
+    public static IpcServer?         Ipc           { get; private set; }
+    public static TrayService?       Tray          { get; private set; }
 
     private Mutex? _mutex;
 
@@ -84,6 +85,11 @@ public partial class App : Application
             HidHide = new HidHideClient();
             HidHide.RecoverOnStartup();
 
+            // Single orchestrator shared by tray, dashboard, and process watcher.
+            // Constructed before MainWindow so MainViewModel can reference it.
+            Orchestrator = new Services.LaunchOrchestrator(HidHide);
+            Orchestrator.ActivityLogged += (_, msg) => Logger.Write(msg);
+
             // ── IPC server ───────────────────────────────────────────────────
             Ipc = new IpcServer();
 
@@ -97,10 +103,7 @@ public partial class App : Application
             }
 
             var window = new Views.MainWindow();
-
-            var orchestrator = new Services.LaunchOrchestrator(HidHide);
-            orchestrator.ActivityLogged += (_, msg) => Logger.Write(msg);
-            Tray = new Services.TrayService(window, ProfileStore, orchestrator);
+            Tray = new Services.TrayService(window, ProfileStore, Orchestrator);
 
             if (Settings.StartMinimized)
                 Tray.HideToTray();

@@ -19,22 +19,10 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
     private HidInputMonitor? _monitor;
     private bool             _isMonitorExpanded;
-    private bool             _hidHideActive;
 
     public ObservableCollection<HidDevice>       Devices { get; } = [];
     public ObservableCollection<AxisViewModel>   Axes    { get; } = [];
     public ObservableCollection<ButtonViewModel> Buttons { get; } = [];
-
-    /// <summary>Maps directly to IOCTL_SET_ACTIVE — master on/off for all HidHide hiding.</summary>
-    public bool HidHideActive
-    {
-        get => _hidHideActive;
-        set
-        {
-            if (!Set(ref _hidHideActive, value)) return;
-            Task.Run(() => _hidHide.SetActive(value));
-        }
-    }
 
     public bool IsMonitorExpanded
     {
@@ -81,9 +69,8 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
     public DevicesViewModel(DeviceEnumerator enumerator, HidHideClient hidHide)
     {
-        _enumerator    = enumerator;
-        _hidHide       = hidHide;
-        _hidHideActive = hidHide.IsAvailable && hidHide.GetActive();
+        _enumerator = enumerator;
+        _hidHide    = hidHide;
 
         RefreshCommand = new RelayCommand(_ => Refresh(), _ => !IsRefreshing);
         CopyAllCommand = new RelayCommand(_ =>
@@ -125,11 +112,9 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
                 // Overlay the persistent HidHide blacklist only — the Devices tab
                 // controls persistent system-wide hiding, not session hiding.
                 // Session state is shown separately on the Dashboard.
-                bool activeState = false;
                 if (_hidHide.IsAvailable)
                 {
                     var persistent = _hidHide.GetBlacklist();
-                    activeState    = _hidHide.GetActive();
                     foreach (var d in list)
                     {
                         if (persistent.Contains(d.InstanceId, StringComparer.OrdinalIgnoreCase))
@@ -140,8 +125,6 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
                 Application.Current.Dispatcher.Invoke(() =>
                 {
                     MergeDevices(list);
-                    _hidHideActive = activeState;
-                    OnPropertyChanged(nameof(HidHideActive));
                     StatusText   = $"{list.Count} device(s) found.";
                     IsRefreshing = false;
                 });

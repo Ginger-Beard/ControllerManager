@@ -183,8 +183,8 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
+        // Orchestrator is owned by App (shared with tray/process-watcher) — don't dispose it.
         _orchestrator.StateChanged   -= OnStateChanged;
         _orchestrator.ActivityLogged -= OnActivityLogged;
-        _orchestrator.Dispose();
     }
 }

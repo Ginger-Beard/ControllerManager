@@ -7,11 +7,10 @@ namespace ControllerManager.ViewModels;
 
 public sealed class ProfileEditorViewModel : ViewModelBase
 {
-    private string _name               = "";
-    private string _exePath            = "";
-    private string _exeName            = "";
-    private int    _initialDelaySeconds = 0;
-    private int    _handleWatcherStepTimeoutMs = 1500;
+    private string _name                = "";
+    private string _exePath             = "";
+    private string _exeName             = "";
+    private int    _initialDelaySeconds = 5;
     private bool   _isDirty;
 
     private HidDevice? _selectedAvailable;
@@ -165,7 +164,6 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         _name        = p.Name;
         _exePath     = p.GameExecutablePath;
         _exeName     = p.GameExecutableName;
-        _handleWatcherStepTimeoutMs = p.HandleWatcherStepTimeoutMs;
 
         // Migrate old Timer-mode profiles: if no initialDelaySeconds was saved but
         // the profile used the Timer trigger, carry forward TimerSeconds as the delay.
@@ -220,15 +218,14 @@ public sealed class ProfileEditorViewModel : ViewModelBase
 
         return new Profile
         {
-            Id                         = ProfileId ?? Guid.NewGuid(),
-            Name                       = _name,
-            GameExecutablePath         = _exePath,
-            GameExecutableName         = _exeName,
-            InitialDelaySeconds        = _initialDelaySeconds,
-            HandleWatcherStepTimeoutMs = _handleWatcherStepTimeoutMs,
-            KeepEnabled                = keepEnabled,
-            DisableThenRestore         = disableThenRestore,
-            KeepDisabled               = keepDisabled,
+            Id                  = ProfileId ?? Guid.NewGuid(),
+            Name                = _name,
+            GameExecutablePath  = _exePath,
+            GameExecutableName  = _exeName,
+            InitialDelaySeconds = _initialDelaySeconds,
+            KeepEnabled         = keepEnabled,
+            DisableThenRestore  = disableThenRestore,
+            KeepDisabled        = keepDisabled,
         };
     }
 }

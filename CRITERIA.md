@@ -1,7 +1,13 @@
 # User Criteria — Device Hiding & HidHide Integration
 
-Reference this alongside TODO.md when implementing the HidHide backend.
-These are the agreed UX requirements. Do not deviate without updating this file.
+Reference this alongside TODO.md. These are the agreed UX requirements for the HidHide
+integration as it currently ships. Do not deviate without updating this file.
+
+**History note (2026-05-19):** the original draft of this file kept a pnputil fallback
+on the table. pnputil and its associated services have since been removed entirely;
+HidHide is the only backend. HandleWatcher is also being removed (EAC kills the process
+for the DuplicateHandle pattern — see TODO Recent decisions). Sections below have been
+updated to match.
 
 ---
 
@@ -17,30 +23,11 @@ is off and the system is completely transparent.
 ## HidHide as backend
 
 ### Installation
-- HidHide is an **optional** prerequisite, not bundled
-- If not installed: fall back to pnputil silently, show a banner in Settings
-- If installed: use HidHide automatically, no user configuration required
-- Banner in Settings tab only:
-  ```
-  Device hiding backend
-    ● HidHide (recommended)   ✓ Installed
-    ○ Basic (pnputil)  [Deprecated]   Some devices may require reboots
-  ```
-  With a download link when not installed. Nothing else changes in the UI.
-- The pnputil option is labelled **Deprecated** in the UI (greyed tag next to the label).
-- Selecting pnputil triggers a confirmation dialog before the setting is applied:
-  > **Switch to legacy backend?**
-  >
-  > The basic (pnputil) backend disables devices at the driver level rather than
-  > filtering access. If something goes wrong mid-session, devices may appear
-  > disabled in Device Manager and require manual re-enabling via Device Manager
-  > or a reboot to recover.
-  >
-  > HidHide is strongly recommended. Only switch if you have a specific reason.
-  >
-  > [Switch anyway]  [Cancel]
-- If the user clicks Cancel, the radio button snaps back to HidHide — no setting change.
-- This dialog only appears when actively switching TO pnputil, not on every settings open.
+- HidHide is a **required** prerequisite, not bundled (we don't ship the kernel driver)
+- If not installed: Settings tab shows a "✗ Not installed — Download ↗" link; the
+  Devices/Games tabs still render but hiding is a no-op.
+- If installed: use HidHide automatically, no user configuration required.
+- No alternate backend — pnputil and its fallback UI were removed 2026-05-19.
 
 ### Companion apps (Pit House, SimHub, GHub, Synapse, etc.)
 - **Zero whitelist configuration required, ever.**
@@ -73,10 +60,19 @@ is off and the system is completely transparent.
 - HidHide Active = false
 - All processes see all devices again immediately — no reboot
 
-### Profile creation UI
-- **No changes.** Same three device roles (Keep Enabled / Disable→Re-enable / Keep Disabled)
-- Same Games tab, same device lists, same profile editor
-- No new fields, no new concepts for the user
+### Profile creation UI (current shape as of 2026-05-19)
+- Single ordered device list per profile with per-row role selector:
+  - **Always Visible** — game sees this from the start (was "Keep Enabled")
+  - **Reveal After Start** — hidden at launch, revealed sequentially after game stabilizes
+  - **Always Hidden** — never visible to this game
+- Per-device `DelaySeconds` field on RevealAfterStart rows (pause after revealing this
+  device, before the next one in the list)
+- Profile-level `InitialDelaySeconds` (default 5s) — wait between game launch and start
+  of reveal sequence. Replaced the old `TriggerMode` + `TimerSeconds` fields.
+- Up / Down / Remove buttons per row; reveal order is stable across launches so
+  in-game slot assignment is consistent.
+- JSON keys (`keepEnabled` / `disableThenRestore` / `keepDisabled`) preserved for
+  backwards compatibility with old profiles.
 
 ---
 
@@ -107,14 +103,12 @@ is off and the system is completely transparent.
 
 ---
 
-## pnputil fallback behaviour (HidHide not installed)
+## Behaviour when HidHide is not installed
 
-- Everything works as it does today
-- MOZA wheel and similar drivers with the exit-3010 quirk: one game session works
-  cleanly (disable → game → restore). A second session in the same Windows session
-  may require a reboot — user sees a clear error message, not a silent failure
-- Settings banner prompts user to install HidHide to resolve this
-- No other degraded behaviour
+- Settings tab shows "✗ Not installed" with a Download link.
+- All device-hiding operations become no-ops; the orchestrator still runs but no
+  hiding/revealing actually happens (the game sees all devices).
+- No silent fallback to a different backend — pnputil is gone.
 
 ---
 
@@ -124,7 +118,6 @@ is off and the system is completely transparent.
 - Shortcut launch — identical
 - Process watcher / auto-trigger — identical
 - Dashboard Launch button — identical
-- Profile structure and JSON format — identical
-- HandleWatcher — still used for re-enable sequencing on pnputil backend;
-  not needed for HidHide (device was never disabled, just access-denied)
 - System tray quick-launch — identical
+- Profile JSON file format — identical (old `triggerMode` / `timerSeconds` fields
+  are read for migration on load and then no longer written)

@@ -16,25 +16,21 @@ public class Profile
     [JsonPropertyName("gameExecutableName")]
     public string GameExecutableName { get; set; } = "";
 
-    // Kept for reading old profiles only — no longer written by the editor.
+    // Legacy: kept for reading old profiles. Not exposed in UI.
+    // TimerSeconds migrates into InitialDelaySeconds when TriggerMode was Timer.
     [JsonPropertyName("triggerMode")]
     public TriggerMode TriggerMode { get; set; } = TriggerMode.HandleWatcher;
     [JsonPropertyName("timerSeconds")]
     public int TimerSeconds { get; set; } = 0;
 
     /// <summary>
-    /// Extra seconds to wait after HandleWatcher fires (or its 120s timeout elapses)
-    /// before beginning the sequential device reveal. 0 = start immediately.
-    /// On load, migrated from old TimerSeconds when TriggerMode was Timer.
+    /// Seconds to wait after the game process starts before beginning the sequential
+    /// device reveal. Default 5s gives FFB-sensitive games (Forza Horizon, etc.) time
+    /// to commit slot #1 to the always-visible wheel before pedals/shifter arrive.
+    /// Set to 0 for hot-plug-aware games that don't care about slot assignment timing.
     /// </summary>
     [JsonPropertyName("initialDelaySeconds")]
-    public int InitialDelaySeconds { get; set; } = 0;
-
-    [JsonPropertyName("hotkeyBinding")]
-    public string HotkeyBinding { get; set; } = "F9";
-
-    [JsonPropertyName("handleWatcherStepTimeoutMs")]
-    public int HandleWatcherStepTimeoutMs { get; set; } = 1500;
+    public int InitialDelaySeconds { get; set; } = 5;
 
     [JsonPropertyName("processWatcherEnabled")]
     public bool ProcessWatcherEnabled { get; set; } = true;

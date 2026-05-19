@@ -18,17 +18,18 @@ namespace ControllerManager.Services;
 public sealed class HidHideClient
 {
     // ── IOCTL codes (verified against HidHideIoctlContract.h + ioctl_contract_tests.cpp) ──
+    // Session-blacklist IOCTLs (0x80016020/24) exist only in the modified driver in our
+    // HidHide/ source repo; the stock 1.4.181.0 ships without them. We use the persistent
+    // blacklist with snapshot/restore around sessions instead — see BeginGameSession.
 
-    private const uint IOCTL_GET_WHITELIST          = 0x80016000;
-    private const uint IOCTL_SET_WHITELIST          = 0x80016004;
-    private const uint IOCTL_GET_BLACKLIST          = 0x80016008;
-    private const uint IOCTL_SET_BLACKLIST          = 0x8001600C;
-    private const uint IOCTL_GET_ACTIVE             = 0x80016010;
-    private const uint IOCTL_SET_ACTIVE             = 0x80016014;
-    private const uint IOCTL_GET_WLINVERSE          = 0x80016018;
-    private const uint IOCTL_SET_WLINVERSE          = 0x8001601C;
-    private const uint IOCTL_ADD_SESSION_BLACKLIST  = 0x80016020;
-    private const uint IOCTL_CLR_SESSION_BLACKLIST  = 0x80016024;
+    private const uint IOCTL_GET_WHITELIST = 0x80016000;
+    private const uint IOCTL_SET_WHITELIST = 0x80016004;
+    private const uint IOCTL_GET_BLACKLIST = 0x80016008;
+    private const uint IOCTL_SET_BLACKLIST = 0x8001600C;
+    private const uint IOCTL_GET_ACTIVE    = 0x80016010;
+    private const uint IOCTL_SET_ACTIVE    = 0x80016014;
+    private const uint IOCTL_GET_WLINVERSE = 0x80016018;
+    private const uint IOCTL_SET_WLINVERSE = 0x8001601C;
 
     private const string ControlDevicePath = @"\\.\HidHide";
 
@@ -87,13 +88,16 @@ public sealed class HidHideClient
 
     public bool IsAvailable { get; }
 
-    // In-memory mirror of the session blacklist (no IOCTL_GET_SESSION_BLACKLIST exists).
+    // In-memory set of device instance IDs currently hidden for this session (for Dashboard UI).
     private readonly HashSet<string> _sessionIds = new(StringComparer.OrdinalIgnoreCase);
     public IReadOnlySet<string> SessionBlacklistIds => _sessionIds;
 
     private bool          _sessionActive;
     private string?       _sessionGameNtPath;
-    private List<string>? _sessionRestoredFromPersistent; // persistent BL entries temporarily removed
+    // Snapshot of the persistent BL before the session started.
+    // Session management modifies the persistent BL (installed driver has no session BL IOCTL).
+    // Restoring this snapshot on EndGameSession rolls back all session changes atomically.
+    private List<string>? _preSessionPersistentBl;
 
     public HidHideClient()
     {
@@ -114,26 +118,6 @@ public sealed class HidHideClient
     public void SetActive(bool v)                              { if (IsAvailable) IoCtlSetBool(IOCTL_SET_ACTIVE, v); }
     public void SetInverse(bool v)                             { if (IsAvailable) IoCtlSetBool(IOCTL_SET_WLINVERSE, v); }
 
-    public void AddSessionBlacklist(IEnumerable<string> instanceIds)
-    {
-        if (!IsAvailable) return;
-        var ids = instanceIds.ToList();
-        var buf = EncodeMultiString(ids);
-        if (buf.Length <= 2) return;
-        using var h = OpenDevice();
-        if (h.IsInvalid) return;
-        DeviceIoControl(h, IOCTL_ADD_SESSION_BLACKLIST, buf, (uint)buf.Length, null, 0, out _, IntPtr.Zero);
-        foreach (var id in ids) _sessionIds.Add(id);
-    }
-
-    public void ClearSessionBlacklist()
-    {
-        if (!IsAvailable) return;
-        using var h = OpenDevice();
-        if (h.IsInvalid) return;
-        DeviceIoControl(h, IOCTL_CLR_SESSION_BLACKLIST, null, 0, null, 0, out _, IntPtr.Zero);
-        _sessionIds.Clear();
-    }
 
     // ── State machine ─────────────────────────────────────────────────────────────
     //
@@ -186,11 +170,20 @@ public sealed class HidHideClient
     }
 
     // ── Game session management ───────────────────────────────────────────────────
+    //
+    // The installed HidHide driver (1.4.181.0) does NOT support session blacklist IOCTLs
+    // (IOCTL_ADD_SESSION_BLACKLIST / CLR). We use the persistent blacklist instead:
+    //   BeginGameSession  → snapshot pre-session BL, write session BL to persistent BL
+    //   UpdateSessionBL   → update persistent BL to reflect revealed devices
+    //   EndGameSession    → restore persistent BL from snapshot
+    //
+    // The snapshot means a CM crash leaves session devices in the persistent BL; the user
+    // will see them as globally hidden on next launch and can re-enable them from Devices tab.
 
-    /// <param name="hideIds">Devices to hide from the game (DisableThenRestore + AlwaysHidden).</param>
-    /// <param name="alwaysVisibleIds">Devices the profile says the game must see (KeepEnabled).
-    /// Any of these currently in the persistent blacklist are temporarily removed so the
-    /// profile's intent wins over the global Devices tab default.</param>
+    /// <param name="hideIds">Devices to hide from the game.</param>
+    /// <param name="alwaysVisibleIds">Devices the game must see (KeepEnabled).
+    /// Temporarily removed from the persistent BL if present, so profile intent wins
+    /// over any global Devices-tab setting.</param>
     public void BeginGameSession(IEnumerable<string> hideIds,
                                  IEnumerable<string> alwaysVisibleIds,
                                  string gameExePath)
@@ -199,27 +192,28 @@ public sealed class HidHideClient
         var ids = hideIds.ToList();
         if (ids.Count == 0) return;
 
-        // Temporarily remove any "always visible" devices from the persistent blacklist.
-        // Profile intent wins over global Devices tab state during a session.
-        var persistentBl = GetBlacklist();
-        var alwaysVisible = alwaysVisibleIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        _sessionRestoredFromPersistent = persistentBl
-            .Where(id => alwaysVisible.Contains(id))
-            .ToList();
+        // Snapshot the BL before any changes — restored verbatim by EndGameSession.
+        _preSessionPersistentBl = GetBlacklist();
 
-        if (_sessionRestoredFromPersistent.Count > 0)
-        {
-            var trimmed = persistentBl
-                .Where(id => !alwaysVisible.Contains(id))
-                .ToList();
-            SetBlacklist(trimmed);
-            Logger.Write($"[HidHide] Temporarily removed {_sessionRestoredFromPersistent.Count} " +
-                         $"device(s) from persistent BL (profile overrides global)");
-        }
+        var alwaysVisible = alwaysVisibleIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // New persistent BL = (pre-session ∪ session devices) − always-visible
+        var blSet = new HashSet<string>(_preSessionPersistentBl, StringComparer.OrdinalIgnoreCase);
+        blSet.UnionWith(ids);
+        blSet.ExceptWith(alwaysVisible);
+        SetBlacklist(blSet);
+        BroadcastDeviceChange();
+
+        // Mirror session IDs for Dashboard UI
+        _sessionIds.Clear();
+        foreach (var id in ids) _sessionIds.Add(id);
+
+        var removedCount = _preSessionPersistentBl.Count(id => alwaysVisible.Contains(id));
+        if (removedCount > 0)
+            Logger.Write($"[HidHide] Temporarily removed {removedCount} device(s) from persistent BL (profile overrides global)");
 
         _sessionGameNtPath = Win32ToNtPath(gameExePath);
         _sessionActive     = true;
-        AddSessionBlacklist(ids);
         ApplyState();
 
         Logger.Write($"[HidHide] Session started — {ids.Count} device(s) hidden");
@@ -227,13 +221,20 @@ public sealed class HidHideClient
 
     /// <summary>
     /// After the game process starts, query its actual NT image path from the kernel
-    /// (via QueryFullProcessImageNameW with PROCESS_NAME_NATIVE) and re-apply the deny
-    /// list with the correct path. This fixes cases where the exe path is a UNC/WSL
-    /// path that Win32ToNtPath cannot convert — e.g. \\wsl.localhost\... paths.
+    /// and re-apply the deny list with the correct path. Only called when the original
+    /// Win32→NT conversion failed (e.g. \\wsl.localhost\... UNC paths).
+    ///
+    /// For normal C:\... paths, Win32ToNtPath already produces a correct \Device\... NT
+    /// path, so this short-circuits without ever opening the game process. This keeps
+    /// us from touching anti-cheat-protected processes unnecessarily.
     /// </summary>
     public void UpdateSessionGameNtPath(int pid)
     {
         if (!IsAvailable || !_sessionActive) return;
+
+        // Already a proper NT device path — no kernel query needed.
+        if (_sessionGameNtPath?.StartsWith(@"\Device\", StringComparison.OrdinalIgnoreCase) == true)
+            return;
 
         var hProcess = NtDll.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
         if (hProcess == IntPtr.Zero) return;
@@ -259,33 +260,40 @@ public sealed class HidHideClient
     public void UpdateSessionBlacklist(IEnumerable<string> remainingInstanceIds)
     {
         if (!IsAvailable || !_sessionActive) return;
-        ClearSessionBlacklist();
         var remaining = remainingInstanceIds.ToList();
-        if (remaining.Count > 0) AddSessionBlacklist(remaining);
-        Logger.WriteVerbose($"[HidHide] Session blacklist updated — {remaining.Count} remaining");
+
+        // Current persistent BL = (pre-session base) ∪ _sessionIds.
+        // Next persistent BL    = (pre-session base) ∪ remaining.
+        // Apply as delta: remove (sessionIds − remaining), add (remaining − sessionIds).
+        var current = GetBlacklist();
+        var blSet = new HashSet<string>(current, StringComparer.OrdinalIgnoreCase);
+        blSet.ExceptWith(_sessionIds);
+        blSet.UnionWith(remaining);
+        SetBlacklist(blSet);
+        BroadcastDeviceChange();
+
+        _sessionIds.Clear();
+        foreach (var id in remaining) _sessionIds.Add(id);
+
+        Logger.WriteVerbose($"[HidHide] Session BL updated — {remaining.Count} remaining");
     }
 
     public void EndGameSession()
     {
         if (!IsAvailable) return;
 
-        ClearSessionBlacklist();
-
-        // Restore any persistent BL entries that were temporarily removed for this session.
-        if (_sessionRestoredFromPersistent?.Count > 0)
+        // Restore persistent BL verbatim to pre-session state.
+        // This undoes both the always-visible removal and the session device additions.
+        if (_preSessionPersistentBl != null)
         {
-            var current = GetBlacklist();
-            foreach (var id in _sessionRestoredFromPersistent)
-                if (!current.Contains(id, StringComparer.OrdinalIgnoreCase))
-                    current.Add(id);
-            SetBlacklist(current);
-            Logger.Write($"[HidHide] Restored {_sessionRestoredFromPersistent.Count} " +
-                         $"device(s) to persistent BL");
+            SetBlacklist(_preSessionPersistentBl);
+            BroadcastDeviceChange();
         }
 
-        _sessionActive                 = false;
-        _sessionGameNtPath             = null;
-        _sessionRestoredFromPersistent = null;
+        _sessionActive          = false;
+        _sessionGameNtPath      = null;
+        _preSessionPersistentBl = null;
+        _sessionIds.Clear();
         ApplyState();
 
         Logger.Write("[HidHide] Session ended");
@@ -298,11 +306,11 @@ public sealed class HidHideClient
         if (!IsAvailable) return;
 
         var existing = GetBlacklist();
-        if (!existing.Contains(instanceId, StringComparer.OrdinalIgnoreCase))
-        {
-            existing.Add(instanceId);
-            SetBlacklist(existing);
-        }
+        if (existing.Contains(instanceId, StringComparer.OrdinalIgnoreCase))
+            return; // no-op
+
+        existing.Add(instanceId);
+        SetBlacklist(existing);
 
         // Only re-apply when no session is active — during a session ApplyState
         // is already correct (inverse mode, game in deny list).
@@ -339,14 +347,15 @@ public sealed class HidHideClient
     {
         if (!IsAvailable) return;
 
-        // Clear any stale session state from a previous crash.
-        ClearSessionBlacklist();
-        _sessionActive                 = false;
-        _sessionGameNtPath             = null;
-        _sessionRestoredFromPersistent = null;
+        // Clear any stale in-memory session state. If CM crashed during a session,
+        // session devices may be stuck in the persistent BL — the user will see them
+        // as disabled on the Devices tab and can re-enable them manually.
+        _sessionActive          = false;
+        _sessionGameNtPath      = null;
+        _preSessionPersistentBl = null;
+        _sessionIds.Clear();
 
-        // ApplyState rebuilds whitelist/inverse/active correctly from the
-        // persistent blacklist entries that survived the restart.
+        // ApplyState rebuilds whitelist/inverse/active from the persistent BL.
         ApplyState();
 
         Logger.Write("[HidHide] Startup recovery complete");

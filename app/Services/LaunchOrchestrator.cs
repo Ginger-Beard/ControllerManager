@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text.RegularExpressions;
 using ControllerManager.Models;
 
 namespace ControllerManager.Services;
@@ -14,18 +13,27 @@ public enum OrchestratorState
     Monitoring,
 }
 
+/// <summary>
+/// Drives a profile through hide → launch → wait → reveal → monitor → restore.
+///
+/// Pre-launch hiding uses HidHide's persistent blacklist (snapshot/restore around the
+/// session). Post-launch reveal is timer-based: <see cref="Profile.InitialDelaySeconds"/>
+/// before the first reveal, then each <see cref="DeviceRef.DelaySeconds"/> between
+/// subsequent reveals.
+///
+/// HandleWatcher was removed in 2026-05 because its PROCESS_DUP_HANDLE +
+/// handle-table enumeration pattern matches anti-cheat (EAC, BattlEye) signatures
+/// for memory cheats and got us externally terminated. A fixed delay is functionally
+/// equivalent — we just trade precision for safety.
+/// </summary>
 public sealed class LaunchOrchestrator : IDisposable
 {
-    private static readonly Regex VidPidRx =
-        new(@"VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    private readonly HidHideClient  _hidHide;
+    private readonly HidHideClient    _hidHide;
     private readonly DeviceEnumerator _enumerator;
-    private readonly HandleWatcher _watcher = new();
 
-    private OrchestratorState _state = OrchestratorState.Idle;
+    private OrchestratorState        _state = OrchestratorState.Idle;
     private CancellationTokenSource? _cts;
-    private Task? _flowTask;
+    private Task?                    _flowTask;
 
     // Instance IDs added to the session blacklist at session start.
     // Used to compute the correct "remaining hidden" set as devices are revealed.
@@ -63,7 +71,6 @@ public sealed class LaunchOrchestrator : IDisposable
     public async Task AbortAsync()
     {
         _cts?.Cancel();
-        _watcher.Stop();
 
         if (_flowTask is not null)
             try { await _flowTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); } catch { }
@@ -78,7 +85,6 @@ public sealed class LaunchOrchestrator : IDisposable
         _cts?.Cancel();
         try { _flowTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
         _cts?.Dispose();
-        _watcher.Dispose();
     }
 
     // ── State machine ────────────────────────────────────────────────────────────
@@ -86,7 +92,7 @@ public sealed class LaunchOrchestrator : IDisposable
     private async Task RunFlow(Profile profile, CancellationToken ct)
     {
         ActiveProfile = profile;
-        Logger.Write($"[Orchestrator] RunFlow — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.TriggerMode}");
+        Logger.Write($"[Orchestrator] RunFlow — profile='{profile.Name}' exe='{profile.GameExecutablePath}'");
         try
         {
             HideDevices(profile, ct);
@@ -96,14 +102,14 @@ public sealed class LaunchOrchestrator : IDisposable
             ct.ThrowIfCancellationRequested();
 
             // Correct the HidHide deny-list entry with the game's actual kernel NT path.
-            // Win32ToNtPath can't convert UNC/WSL paths; this fixes those cases.
+            // No-op for normal C:\... paths (already correct); only opens the game process
+            // when Win32ToNtPath couldn't resolve (UNC / WSL paths). Avoids touching
+            // anti-cheat-protected processes unnecessarily.
             _hidHide.UpdateSessionGameNtPath(gameProc.Id);
 
             if (profile.DisableThenRestore.Count > 0)
             {
-                _watcher.Start(gameProc.Id);
-
-                await WaitForAcquisition(profile, ct);
+                await WaitBeforeReveal(profile, ct);
                 ct.ThrowIfCancellationRequested();
 
                 await RevealDisableThenRestore(profile, ct);
@@ -123,7 +129,6 @@ public sealed class LaunchOrchestrator : IDisposable
         }
         finally
         {
-            _watcher.Stop();
             // Always clean up the HidHide session — even if the flow threw or was cancelled
             // mid-way (e.g. game launch timeout). Prevents stale session blacklist state.
             _hidHide.EndGameSession();
@@ -206,26 +211,25 @@ public sealed class LaunchOrchestrator : IDisposable
         throw new TimeoutException($"'{procName}.exe' did not start within 60 seconds.");
     }
 
-    // ── Phase 3: wait for acquisition ────────────────────────────────────────────
+    // ── Phase 3: wait before starting reveal sequence ────────────────────────────
 
-    private async Task WaitForAcquisition(Profile profile, CancellationToken ct)
+    private async Task WaitBeforeReveal(Profile profile, CancellationToken ct)
     {
         State = OrchestratorState.WaitingForAcquisition;
 
-        // Always watch for the game to open a handle to an always-visible device.
-        // Fall through after 120s if no signal arrives.
-        Log("Watching for game to acquire first device...");
-        var ev = await WaitForAnyDeviceEvent(timeoutMs: 120_000, ct);
-        if (ev is not null)
-            Log($"Acquisition signal received.");
-        else
-            LogVerbose("No acquisition signal within 120s — proceeding anyway.");
-
-        if (profile.InitialDelaySeconds > 0)
+        var delay = Math.Max(0, profile.InitialDelaySeconds);
+        if (delay == 0)
         {
-            Log($"Waiting {profile.InitialDelaySeconds}s before revealing devices...");
-            await Task.Delay(profile.InitialDelaySeconds * 1000, ct);
+            // No wait configured — log and continue. This is fine for hot-plug-aware games
+            // where the reveal can happen any time, but FH-style games need a non-zero
+            // delay so the startup DirectInput scan commits slot #1 to the wheel first.
+            LogVerbose("InitialDelaySeconds = 0 — revealing immediately. " +
+                       "For FFB-sensitive games, set a 5-10s delay.");
+            return;
         }
+
+        Log($"Waiting {delay}s before revealing devices...");
+        await Task.Delay(delay * 1000, ct);
     }
 
     // ── Phase 4: reveal DisableThenRestore devices one by one ────────────────────
@@ -279,61 +283,10 @@ public sealed class LaunchOrchestrator : IDisposable
         Log($"{procName}.exe exited.");
     }
 
-    // ── HandleWatcher helpers ────────────────────────────────────────────────────
-
-    private Task<HidHandleEvent?> WaitForAnyDeviceEvent(int timeoutMs, CancellationToken ct)
-    {
-        var tcs = new TaskCompletionSource<HidHandleEvent?>();
-
-        EventHandler<HidHandleEvent> handler = null!;
-        handler = (_, e) => { _watcher.HidHandleOpened -= handler; tcs.TrySetResult(e); };
-        _watcher.HidHandleOpened += handler;
-
-        Task.Delay(timeoutMs, ct).ContinueWith(_ =>
-        {
-            _watcher.HidHandleOpened -= handler;
-            tcs.TrySetResult(null);
-        });
-
-        return tcs.Task;
-    }
-
-    private Task<HidHandleEvent?> WaitForDeviceEvent(string vid, string pid, int timeoutMs, CancellationToken ct)
-    {
-        var tcs = new TaskCompletionSource<HidHandleEvent?>();
-
-        EventHandler<HidHandleEvent> handler = null!;
-        handler = (_, e) =>
-        {
-            var m = VidPidRx.Match(e.DevicePath);
-            if (m.Success &&
-                m.Groups[1].Value.Equals(vid, StringComparison.OrdinalIgnoreCase) &&
-                m.Groups[2].Value.Equals(pid, StringComparison.OrdinalIgnoreCase))
-            {
-                _watcher.HidHandleOpened -= handler;
-                tcs.TrySetResult(e);
-            }
-        };
-        _watcher.HidHandleOpened += handler;
-
-        Task.Delay(timeoutMs, ct).ContinueWith(_ =>
-        {
-            _watcher.HidHandleOpened -= handler;
-            tcs.TrySetResult(null);
-        });
-
-        return tcs.Task;
-    }
+    // ── Helpers ──────────────────────────────────────────────────────────────────
 
     private static string ProcessName(string executableName) =>
         executableName.Replace(".exe", "", StringComparison.OrdinalIgnoreCase);
-
-    private static (string? vid, string? pid) ParseVidPid(string instanceId)
-    {
-        var m = VidPidRx.Match(instanceId);
-        if (!m.Success) return (null, null);
-        return (m.Groups[1].Value.ToUpperInvariant(), m.Groups[2].Value.ToUpperInvariant());
-    }
 
     private void Log(string message) =>
         ActivityLogged?.Invoke(this, $"{DateTime.Now:HH:mm:ss}  {message}");
