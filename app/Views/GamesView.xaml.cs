@@ -1,29 +1,43 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Media;
 using ControllerManager.ViewModels;
-using DragEventArgs   = System.Windows.DragEventArgs;
-using MouseEventArgs  = System.Windows.Input.MouseEventArgs;
+using DragEventArgs        = System.Windows.DragEventArgs;
+using MouseEventArgs       = System.Windows.Input.MouseEventArgs;
 using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
-using MouseButtonState = System.Windows.Input.MouseButtonState;
-using DragDrop        = System.Windows.DragDrop;
-using DragDropEffects = System.Windows.DragDropEffects;
-using DataObject      = System.Windows.DataObject;
-using Point           = System.Windows.Point;
+using MouseButtonState     = System.Windows.Input.MouseButtonState;
+using DragDrop             = System.Windows.DragDrop;
+using DragDropEffects      = System.Windows.DragDropEffects;
+using DataObject           = System.Windows.DataObject;
+using Point                = System.Windows.Point;
+using Size                 = System.Windows.Size;
+using Brush                = System.Windows.Media.Brush;
+using Color                = System.Windows.Media.Color;
+using Pen                  = System.Windows.Media.Pen;
 
 namespace ControllerManager.Views;
 
 public partial class GamesView : UserControl
 {
-    // Drag-and-drop reordering state. Drag is initiated from the ☰ handle in each
-    // assignment row; drop targets are the row Borders themselves. The dragged item
-    // is moved to the position of the row it was dropped on (before or after based
-    // on cursor Y within that row).
+    // Drag-and-drop reordering. Drag source = the ☰ handle in each row.
+    // Drop target = the row Border itself. Visual feedback:
+    //   • Ghost adorner of the dragged row follows the cursor
+    //   • Source row dims to 0.4 opacity for the duration of the drag
+    //   • Drop target row shows a colored line (top or bottom edge) indicating
+    //     where the dropped item will land
     private static readonly string DragFormat = "ControllerManager.AssignmentDrag";
 
     private Point _dragStart;
     private DeviceAssignmentViewModel? _dragItem;
+    private FrameworkElement? _sourceRow;
+    private DragAdorner? _ghostAdorner;
+    private InsertionAdorner? _insertionAdorner;
+    private AdornerLayer? _adornerLayer;
 
     public GamesView() => InitializeComponent();
+
+    // ── Drag source ──────────────────────────────────────────────────────────
 
     private void DragHandle_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
@@ -42,16 +56,53 @@ public partial class GamesView : UserControl
             Math.Abs(diff.Y) < SystemParameters.MinimumVerticalDragDistance)
             return;
 
+        var handle = sender as FrameworkElement ?? this;
+        _sourceRow = FindRowBorder(handle);
+        if (_sourceRow is null) { _dragItem = null; return; }
+
+        _adornerLayer = AdornerLayer.GetAdornerLayer(_sourceRow);
+        if (_adornerLayer is not null)
+        {
+            _ghostAdorner = new DragAdorner(_sourceRow);
+            _adornerLayer.Add(_ghostAdorner);
+        }
+
+        _sourceRow.Opacity = 0.4;
+
         var data = new DataObject(DragFormat, _dragItem);
-        var src  = sender as FrameworkElement ?? this;
-        _dragItem = null; // consumed by DoDragDrop
-        DragDrop.DoDragDrop(src, data, DragDropEffects.Move);
+        var dragVm = _dragItem;
+        _dragItem = null;
+
+        try
+        {
+            DragDrop.DoDragDrop(_sourceRow, data, DragDropEffects.Move);
+        }
+        finally
+        {
+            // Always restore visual state, even if the drag was cancelled
+            CleanupDragVisuals();
+        }
     }
+
+    // ── Drop target — row ────────────────────────────────────────────────────
 
     private void AssignmentRow_DragOver(object sender, DragEventArgs e)
     {
-        e.Effects = e.Data.GetDataPresent(DragFormat) ? DragDropEffects.Move : DragDropEffects.None;
+        var ok = e.Data.GetDataPresent(DragFormat);
+        e.Effects = ok ? DragDropEffects.Move : DragDropEffects.None;
         e.Handled = true;
+
+        if (sender is FrameworkElement target)
+        {
+            UpdateGhostPosition(e);
+            UpdateInsertionIndicator(target, e);
+        }
+    }
+
+    private void AssignmentRow_DragLeave(object sender, DragEventArgs e)
+    {
+        // Don't clear the insertion indicator here — DragOver on the next row will
+        // re-place it. Clearing here causes flicker as the cursor moves between rows.
     }
 
     private void AssignmentRow_Drop(object sender, DragEventArgs e)
@@ -69,11 +120,11 @@ public partial class GamesView : UserControl
         if (srcIdx < 0 || targetIdx < 0 || srcIdx == targetIdx) return;
 
         // Drop in the top half = insert before; bottom half = insert after.
-        var localPos = e.GetPosition(target);
+        var localPos    = e.GetPosition(target);
         var insertAfter = localPos.Y > target.ActualHeight / 2;
-        var insertIdx = insertAfter ? targetIdx + 1 : targetIdx;
+        var insertIdx   = insertAfter ? targetIdx + 1 : targetIdx;
 
-        // When moving down past the source, the source's removal shifts indices left by one.
+        // Removing the source shifts everything after it left by one
         if (srcIdx < insertIdx) insertIdx--;
         if (insertIdx < 0 || insertIdx >= editor.Assignments.Count) insertIdx = editor.Assignments.Count - 1;
         if (insertIdx == srcIdx) return;
@@ -82,17 +133,18 @@ public partial class GamesView : UserControl
         e.Handled = true;
     }
 
-    // Drops in the empty area below the last row → append to end
+    // ── Drop target — empty area below last row ──────────────────────────────
+
     private void AssignmentsHost_Drop(object sender, DragEventArgs e)
     {
-        if (e.Handled) return; // already handled by a row
+        if (e.Handled) return;
         if (!e.Data.GetDataPresent(DragFormat)) return;
         if (e.Data.GetData(DragFormat) is not DeviceAssignmentViewModel src) return;
 
         var editor = ResolveEditor();
         if (editor is null) return;
 
-        var srcIdx = editor.Assignments.IndexOf(src);
+        var srcIdx  = editor.Assignments.IndexOf(src);
         var lastIdx = editor.Assignments.Count - 1;
         if (srcIdx < 0 || srcIdx == lastIdx) return;
 
@@ -100,6 +152,125 @@ public partial class GamesView : UserControl
         e.Handled = true;
     }
 
+    // ── Visual helpers ───────────────────────────────────────────────────────
+
+    private void UpdateGhostPosition(DragEventArgs e)
+    {
+        if (_ghostAdorner is null || _adornerLayer is null) return;
+        _ghostAdorner.UpdatePosition(e.GetPosition(_adornerLayer));
+    }
+
+    private void UpdateInsertionIndicator(FrameworkElement target, DragEventArgs e)
+    {
+        var localPos = e.GetPosition(target);
+        var insertAfter = localPos.Y > target.ActualHeight / 2;
+
+        // Remove the previous insertion adorner before showing the new one
+        RemoveInsertionAdorner();
+
+        var layer = AdornerLayer.GetAdornerLayer(target);
+        if (layer is null) return;
+        _insertionAdorner = new InsertionAdorner(target, insertAfter);
+        layer.Add(_insertionAdorner);
+    }
+
+    private void RemoveInsertionAdorner()
+    {
+        if (_insertionAdorner is null) return;
+        var layer = AdornerLayer.GetAdornerLayer(_insertionAdorner.AdornedElement);
+        layer?.Remove(_insertionAdorner);
+        _insertionAdorner = null;
+    }
+
+    private void CleanupDragVisuals()
+    {
+        if (_sourceRow is not null)
+        {
+            _sourceRow.Opacity = 1.0;
+            _sourceRow = null;
+        }
+        if (_ghostAdorner is not null && _adornerLayer is not null)
+        {
+            _adornerLayer.Remove(_ghostAdorner);
+            _ghostAdorner = null;
+        }
+        _adornerLayer = null;
+        RemoveInsertionAdorner();
+    }
+
+    private static FrameworkElement? FindRowBorder(DependencyObject start)
+    {
+        // The row template root is a Border tagged via DataContext = DeviceAssignmentViewModel.
+        // Walk up the visual tree until we find it.
+        var current = start as DependencyObject;
+        while (current is not null)
+        {
+            if (current is FrameworkElement fe && fe.DataContext is DeviceAssignmentViewModel
+                && fe is Border)
+                return fe;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return null;
+    }
+
     private ProfileEditorViewModel? ResolveEditor() =>
         (DataContext as GamesViewModel)?.Editor;
+}
+
+// ── Adorners ─────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Renders a translucent copy of the source row at the current cursor position
+/// so the user sees the row "floating" as they drag.
+/// </summary>
+internal sealed class DragAdorner : Adorner
+{
+    private readonly VisualBrush _brush;
+    private readonly Size        _size;
+    private Point                _offset;
+
+    public DragAdorner(FrameworkElement source) : base(source)
+    {
+        _brush           = new VisualBrush(source) { Opacity = 0.6, Stretch = Stretch.None };
+        _size            = new Size(source.ActualWidth, source.ActualHeight);
+        IsHitTestVisible = false;
+    }
+
+    public void UpdatePosition(Point p)
+    {
+        // Offset so the ghost sits just below-right of the cursor (doesn't cover it)
+        _offset = new Point(p.X + 8, p.Y + 4);
+        if (Parent is AdornerLayer layer) layer.Update(AdornedElement);
+    }
+
+    protected override void OnRender(DrawingContext dc)
+    {
+        var rect = new Rect(_offset, _size);
+        dc.DrawRectangle(_brush, null, rect);
+    }
+}
+
+/// <summary>
+/// A 2px horizontal line drawn at the top or bottom edge of the adorned row,
+/// indicating where the dragged item will land if dropped now.
+/// </summary>
+internal sealed class InsertionAdorner : Adorner
+{
+    private static readonly Brush LineBrush = new SolidColorBrush(Color.FromRgb(60, 179, 113));
+
+    private readonly bool _atBottom;
+
+    public InsertionAdorner(FrameworkElement adorned, bool atBottom) : base(adorned)
+    {
+        _atBottom        = atBottom;
+        IsHitTestVisible = false;
+    }
+
+    protected override void OnRender(DrawingContext dc)
+    {
+        if (AdornedElement is not FrameworkElement fe) return;
+        var y = _atBottom ? fe.ActualHeight - 1 : 0;
+        var pen = new Pen(LineBrush, 2);
+        dc.DrawLine(pen, new Point(0, y), new Point(fe.ActualWidth, y));
+    }
 }

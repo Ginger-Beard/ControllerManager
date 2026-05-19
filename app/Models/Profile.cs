@@ -7,6 +7,15 @@ public class Profile
     [JsonPropertyName("id")]
     public Guid Id { get; set; } = Guid.NewGuid();
 
+    /// <summary>
+    /// JSON schema version. 0 = legacy (InitialDelaySeconds + per-device DelaySeconds
+    /// meant "wait AFTER reveal"). 1 = current (per-device DelaySeconds means
+    /// "wait BEFORE reveal"; no profile-level initial delay).
+    /// Bumped by ProfileEditorViewModel.LoadProfile after migration.
+    /// </summary>
+    [JsonPropertyName("schemaVersion")]
+    public int SchemaVersion { get; set; } = 0;
+
     [JsonPropertyName("name")]
     public string Name { get; set; } = "New Profile";
 

@@ -12,7 +12,6 @@ public sealed class ProfileEditorViewModel : ViewModelBase
     private string _name                  = "";
     private string _exePath               = "";
     private string _exeName               = "";
-    private int    _initialDelaySeconds   = 5;
     private bool   _processWatcherEnabled = true;
     private bool   _isDirty;
     private bool   _showAllHid;
@@ -37,12 +36,6 @@ public sealed class ProfileEditorViewModel : ViewModelBase
     {
         get => _exeName;
         private set => Set(ref _exeName, value);
-    }
-
-    public int InitialDelaySeconds
-    {
-        get => _initialDelaySeconds;
-        set { Set(ref _initialDelaySeconds, Math.Max(0, value)); IsDirty = true; }
     }
 
     public bool ProcessWatcherEnabled
@@ -203,8 +196,19 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         // Track edits so unsaved-changes indicator is accurate; also recompute
         // HasRevealAfterStart when an assignment's role changes.
         IsDirty = true;
-        if (e.PropertyName is nameof(DeviceAssignmentViewModel.Role))
-            OnPropertyChanged(nameof(HasRevealAfterStart));
+        if (e.PropertyName is not nameof(DeviceAssignmentViewModel.Role)) return;
+
+        OnPropertyChanged(nameof(HasRevealAfterStart));
+
+        // When the FIRST RevealAfterStart device in the list is set, default its delay
+        // to 5s if it's still 0 — this preserves FFB on Forza-style games without the
+        // user needing to know to set it manually.
+        if (sender is not DeviceAssignmentViewModel vm) return;
+        if (vm.Role != DeviceRole.RevealAfterStart) return;
+        if (vm.DelaySeconds != 0) return;
+        var firstReveal = Assignments.FirstOrDefault(a => a.Role == DeviceRole.RevealAfterStart);
+        if (ReferenceEquals(firstReveal, vm))
+            vm.DelaySeconds = 5;
     }
 
     public void LoadProfile(Profile p)
@@ -215,10 +219,33 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         _exeName               = p.GameExecutableName;
         _processWatcherEnabled = p.ProcessWatcherEnabled;
 
-        // Migrate old Timer-mode profiles: if no initialDelaySeconds was saved but
-        // the profile used the Timer trigger, carry forward TimerSeconds as the delay.
-        _initialDelaySeconds = p.InitialDelaySeconds > 0 ? p.InitialDelaySeconds
+        // Migrate legacy schema-0 profiles to schema-1 timing semantics.
+        // Old: InitialDelaySeconds = wait BEFORE first reveal; per-device DelaySeconds = wait AFTER each reveal.
+        // New: per-device DelaySeconds = wait BEFORE each reveal; no profile-level initial delay.
+        // Migration: shift delays one position to the right, with InitialDelaySeconds
+        // becoming the first device's pre-delay. The old last-device.DelaySeconds is
+        // dropped (it described a wait AFTER the final reveal — visually irrelevant).
+        //
+        // Old Timer-mode profiles (TriggerMode=Timer, TimerSeconds>0) used TimerSeconds
+        // as the initial delay before reveals; carry that forward when InitialDelaySeconds
+        // wasn't explicitly set.
+        int legacyInitial = p.InitialDelaySeconds > 0
+            ? p.InitialDelaySeconds
             : (p.TriggerMode == TriggerMode.Timer ? p.TimerSeconds : 0);
+
+        int[] migratedDelays;
+        if (p.SchemaVersion < 1 && p.DisableThenRestore.Count > 0)
+        {
+            migratedDelays = new int[p.DisableThenRestore.Count];
+            migratedDelays[0] = legacyInitial;
+            for (int i = 1; i < p.DisableThenRestore.Count; i++)
+                migratedDelays[i] = p.DisableThenRestore[i - 1].DelaySeconds;
+        }
+        else
+        {
+            // Schema-1: delays already mean "wait before reveal"
+            migratedDelays = [.. p.DisableThenRestore.Select(d => d.DelaySeconds)];
+        }
 
         // Detach old assignment handlers before clearing
         foreach (var a in Assignments) a.PropertyChanged -= OnAssignmentPropertyChanged;
@@ -231,15 +258,15 @@ public sealed class ProfileEditorViewModel : ViewModelBase
             Assignments.Add(vm);
         }
 
-        foreach (var d in p.KeepEnabled)        Add(d, DeviceRole.AlwaysVisible);
-        foreach (var d in p.DisableThenRestore) Add(d, DeviceRole.RevealAfterStart, d.DelaySeconds);
-        foreach (var d in p.KeepDisabled)       Add(d, DeviceRole.AlwaysHidden);
+        foreach (var d in p.KeepEnabled) Add(d, DeviceRole.AlwaysVisible);
+        for (int i = 0; i < p.DisableThenRestore.Count; i++)
+            Add(p.DisableThenRestore[i], DeviceRole.RevealAfterStart, migratedDelays[i]);
+        foreach (var d in p.KeepDisabled) Add(d, DeviceRole.AlwaysHidden);
 
         IsDirty = false;
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(ExePath));
         OnPropertyChanged(nameof(ExeName));
-        OnPropertyChanged(nameof(InitialDelaySeconds));
         OnPropertyChanged(nameof(ProcessWatcherEnabled));
         OnPropertyChanged(nameof(HasRevealAfterStart));
     }
@@ -275,10 +302,10 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         return new Profile
         {
             Id                    = ProfileId ?? Guid.NewGuid(),
+            SchemaVersion         = 1, // delays now mean "wait before reveal"
             Name                  = _name,
             GameExecutablePath    = _exePath,
             GameExecutableName    = _exeName,
-            InitialDelaySeconds   = _initialDelaySeconds,
             ProcessWatcherEnabled = _processWatcherEnabled,
             KeepEnabled           = keepEnabled,
             DisableThenRestore    = disableThenRestore,

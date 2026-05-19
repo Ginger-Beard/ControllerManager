@@ -8,7 +8,6 @@ public enum OrchestratorState
     Idle,
     HidingDevices,
     LaunchingGame,
-    WaitingForAcquisition,
     RestoringDevices,
     Monitoring,
 }
@@ -109,9 +108,6 @@ public sealed class LaunchOrchestrator : IDisposable
 
             if (profile.DisableThenRestore.Count > 0)
             {
-                await WaitBeforeReveal(profile, ct);
-                ct.ThrowIfCancellationRequested();
-
                 await RevealDisableThenRestore(profile, ct);
                 ct.ThrowIfCancellationRequested();
             }
@@ -211,28 +207,13 @@ public sealed class LaunchOrchestrator : IDisposable
         throw new TimeoutException($"'{procName}.exe' did not start within 60 seconds.");
     }
 
-    // ── Phase 3: wait before starting reveal sequence ────────────────────────────
-
-    private async Task WaitBeforeReveal(Profile profile, CancellationToken ct)
-    {
-        State = OrchestratorState.WaitingForAcquisition;
-
-        var delay = Math.Max(0, profile.InitialDelaySeconds);
-        if (delay == 0)
-        {
-            // No wait configured — log and continue. This is fine for hot-plug-aware games
-            // where the reveal can happen any time, but FH-style games need a non-zero
-            // delay so the startup DirectInput scan commits slot #1 to the wheel first.
-            LogVerbose("InitialDelaySeconds = 0 — revealing immediately. " +
-                       "For FFB-sensitive games, set a 5-10s delay.");
-            return;
-        }
-
-        Log($"Waiting {delay}s before revealing devices...");
-        await Task.Delay(delay * 1000, ct);
-    }
-
-    // ── Phase 4: reveal DisableThenRestore devices one by one ────────────────────
+    // ── Phase 3: reveal devices one by one ───────────────────────────────────────
+    //
+    // DelaySeconds is the wait BEFORE revealing each device (not after).
+    // The first device's delay protects FFB-sensitive games: the game has time to
+    // finish its startup DirectInput scan and commit slot #1 to the always-visible
+    // wheel before pedals/shifter etc. arrive. Subsequent devices' delays control
+    // inter-reveal spacing so the game's hot-plug listener processes them in order.
 
     private async Task RevealDisableThenRestore(Profile profile, CancellationToken ct)
     {
@@ -244,6 +225,13 @@ public sealed class LaunchOrchestrator : IDisposable
         foreach (var dev in profile.DisableThenRestore)
         {
             ct.ThrowIfCancellationRequested();
+
+            if (dev.DelaySeconds > 0)
+            {
+                LogVerbose($"  Waiting {dev.DelaySeconds}s before revealing {dev.FriendlyName}...");
+                await Task.Delay(dev.DelaySeconds * 1000, ct);
+            }
+
             Log($"  Revealing: {dev.FriendlyName}");
             revealed.Add(dev.InstanceId);
 
@@ -253,12 +241,6 @@ public sealed class LaunchOrchestrator : IDisposable
                 .Where(id => !revealed.Contains(id))
                 .ToList();
             _hidHide.UpdateSessionBlacklist(remaining);
-
-            if (dev.DelaySeconds > 0)
-            {
-                LogVerbose($"    Waiting {dev.DelaySeconds}s...");
-                await Task.Delay(dev.DelaySeconds * 1000, ct);
-            }
         }
 
         Log("All Reveal-After-Start devices revealed.");
