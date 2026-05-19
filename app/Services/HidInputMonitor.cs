@@ -197,11 +197,21 @@ public sealed class HidInputMonitor : IDisposable
                                 out uint raw, preparsed, buf, bytesRead)
                             == HidApi.HIDP_STATUS_SUCCESS)
                         {
-                            // Treat raw as signed when LogicalMin is negative,
-                            // unsigned otherwise. uint→int cast preserves bits.
-                            int signed = ax.LogicalMin < 0
-                                ? unchecked((int)raw)
-                                : (int)(raw & 0xFFFFFFFF);
+                            // HidP_GetUsageValue does NOT sign-extend values smaller
+                            // than 32 bits — a 16-bit signed axis at -1 comes back as
+                            // raw=0x0000FFFF, not 0xFFFFFFFF. Re-extend by detecting
+                            // when raw exceeds LogicalMax: that means the high bit of
+                            // the source value was set and the actual signed value is
+                            // (raw - 2^bitWidth). Total bit width = (LogicalMax - LogicalMin + 1).
+                            // Without this, axes with negative LogicalMin (sticks, signed
+                            // trigger encodings) clamp to 1.0 instead of swinging around
+                            // their zero point.
+                            int signed;
+                            long bitWidthCount = (long)ax.LogicalMax - ax.LogicalMin + 1;
+                            if (ax.LogicalMin < 0 && raw > (uint)ax.LogicalMax)
+                                signed = (int)((long)raw - bitWidthCount);
+                            else
+                                signed = (int)raw;
 
                             int range = ax.LogicalMax - ax.LogicalMin;
                             float norm = range <= 0 ? 0f

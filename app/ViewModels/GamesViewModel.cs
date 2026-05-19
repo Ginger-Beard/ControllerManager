@@ -102,6 +102,10 @@ public sealed class GamesViewModel : ViewModelBase
                 MessageBoxResult.Cancel);
             if (confirm != MessageBoxResult.OK) return;
 
+            // Drop the per-profile launch task (if any) so we don't leave orphans
+            // in Task Scheduler. Idempotent — no-op when no task exists.
+            LaunchTaskManager.DeleteTaskForProfile(_selectedProfile.Id);
+
             _profiles.Remove(_selectedProfile);
             Profiles.Remove(_selectedProfile);
             SelectedProfile = Profiles.FirstOrDefault();

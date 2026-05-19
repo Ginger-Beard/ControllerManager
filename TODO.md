@@ -86,21 +86,20 @@ always writes v2.
 
 ## Open work
 
-### UAC-free Steam / shortcut launch
-`ControllerManager.exe` is `requireAdministrator`. Steam and `.lnk` shortcuts that
-target it trigger a UAC prompt on every launch — even when CM is already running in
-the tray (second instance still elevates before forwarding the IPC, then exits).
+### Steam launch UAC (still open)
+`ShortcutExporter` was updated to use per-profile Scheduled Tasks
+(`LaunchTaskManager`) so .lnk shortcuts no longer prompt UAC. The Steam wrapper
+(`--steam-wrap <profileId> -- %command%`) can't use the same trick directly —
+`schtasks /Run` doesn't forward arguments, and Steam needs `%command%` passed
+to the wrapped exe. Possible approach: a small non-admin launcher exe that
+takes the steam-wrap args and uses IPC + a parallel "headless task" to invoke
+the elevated work. Defer until the .lnk path has been tested in practice.
 
-Fix: create a Scheduled Task with "Run with highest privileges," then change
-`ShortcutExporter` to point shortcuts at `schtasks /Run /TN <task>` (with the profile
-ID passed via task argument or environment variable) instead of the exe directly.
-Same trick `Start with Windows` already uses for the boot launch.
-
-### Input monitor — controller triggers + visuals
-HID analog triggers reportedly don't display correctly in the input monitor (need a
-real controller to repro). Joystick X/Y scatter visualization, center-zero drift
-viz, and stick visuals are still backlog. Code lives in `HidInputMonitor.cs` +
-`DevicesViewModel.UpdateMonitor`.
+### Input monitor — joystick scatter / drift viz (polish)
+Sign-extension bug fixed (signed axes now swing around their zero point instead
+of clamping to 1.0). Still open: a 2D X/Y stick scatter widget (left + right
+stick pairs), center-zero drift visualization. Pure UI polish — needs a real
+controller for design iteration.
 
 ---
 
