@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using ControllerManager.Native;
 using Microsoft.Win32.SafeHandles;
 
 namespace ControllerManager.Services;
@@ -48,6 +49,13 @@ public sealed class HidHideClient
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint QueryDosDevice(string lpDeviceName, char[] lpTargetPath, uint ucchMax);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool QueryFullProcessImageNameW(
+        IntPtr hProcess, uint dwFlags, char[] lpExeName, ref uint lpdwSize);
+
+    private const uint PROCESS_NAME_NATIVE               = 0x1;
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
     private const uint GENERIC_READ  = 0x80000000;
     private const uint FILE_SHARE_ALL = 0x7; // READ | WRITE | DELETE
@@ -215,6 +223,37 @@ public sealed class HidHideClient
         ApplyState();
 
         Logger.Write($"[HidHide] Session started — {ids.Count} device(s) hidden");
+    }
+
+    /// <summary>
+    /// After the game process starts, query its actual NT image path from the kernel
+    /// (via QueryFullProcessImageNameW with PROCESS_NAME_NATIVE) and re-apply the deny
+    /// list with the correct path. This fixes cases where the exe path is a UNC/WSL
+    /// path that Win32ToNtPath cannot convert — e.g. \\wsl.localhost\... paths.
+    /// </summary>
+    public void UpdateSessionGameNtPath(int pid)
+    {
+        if (!IsAvailable || !_sessionActive) return;
+
+        var hProcess = NtDll.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (hProcess == IntPtr.Zero) return;
+
+        try
+        {
+            var buf  = new char[1024];
+            uint len = (uint)buf.Length;
+            if (!QueryFullProcessImageNameW(hProcess, PROCESS_NAME_NATIVE, buf, ref len) || len == 0)
+                return;
+
+            var ntPath = new string(buf, 0, (int)len);
+            if (ntPath.Equals(_sessionGameNtPath, StringComparison.OrdinalIgnoreCase))
+                return; // already correct
+
+            Logger.Write($"[HidHide] Corrected game NT path: {ntPath}");
+            _sessionGameNtPath = ntPath;
+            ApplyState(); // re-apply deny list with correct path
+        }
+        finally { NtDll.CloseHandle(hProcess); }
     }
 
     public void UpdateSessionBlacklist(IEnumerable<string> remainingInstanceIds)

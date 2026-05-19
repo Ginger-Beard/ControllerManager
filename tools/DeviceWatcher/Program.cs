@@ -308,9 +308,9 @@ static class Program
 
         var sbuf = new char[127];
         if (HidD_GetManufacturerString(h, sbuf, (uint)(sbuf.Length * 2)))
-            vendor  = new string(sbuf).TrimEnd('\0');
+        { int e = Array.IndexOf(sbuf, '\0'); vendor  = e > 0 ? new string(sbuf, 0, e) : ""; }
         if (HidD_GetProductString(h, sbuf, (uint)(sbuf.Length * 2)))
-            product = new string(sbuf).TrimEnd('\0');
+        { int e = Array.IndexOf(sbuf, '\0'); product = e > 0 ? new string(sbuf, 0, e) : ""; }
 
         if (HidD_GetPreparsedData(h, out var pre) && pre != IntPtr.Zero)
         {

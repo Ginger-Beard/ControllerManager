@@ -95,6 +95,10 @@ public sealed class LaunchOrchestrator : IDisposable
             var gameProc = await LaunchGame(profile, ct);
             ct.ThrowIfCancellationRequested();
 
+            // Correct the HidHide deny-list entry with the game's actual kernel NT path.
+            // Win32ToNtPath can't convert UNC/WSL paths; this fixes those cases.
+            _hidHide.UpdateSessionGameNtPath(gameProc.Id);
+
             if (profile.DisableThenRestore.Count > 0)
             {
                 _watcher.Start(gameProc.Id);

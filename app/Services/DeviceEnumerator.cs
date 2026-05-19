@@ -255,13 +255,15 @@ public sealed class DeviceEnumerator
                 pid = attrs.ProductID;
             }
 
-            // Manufacturer + product strings (same buffer size HidHide uses: 127 chars)
+            // Manufacturer + product strings (same buffer size HidHide uses: 127 chars).
+            // Use IndexOf to stop at the first null — TrimEnd('\0') leaves non-null garbage
+            // bytes that can appear after the null terminator in the reused buffer.
             var buf = new char[HidApi.HidStringMax];
             uint bufBytes = (uint)(buf.Length * sizeof(char));
             if (HidApi.HidD_GetManufacturerString(handle, buf, bufBytes))
-                vendor = new string(buf).TrimEnd('\0');
+                vendor  = HidStringToString(buf);
             if (HidApi.HidD_GetProductString(handle, buf, bufBytes))
-                product = new string(buf).TrimEnd('\0');
+                product = HidStringToString(buf);
 
             // Capabilities: usage page + usage + axis/button counts
             IntPtr preparsed = IntPtr.Zero;
@@ -347,6 +349,14 @@ public sealed class DeviceEnumerator
 
     private static IEnumerable<string> SplitWords(string s) =>
         s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+
+    // Stop at the first null character. TrimEnd('\0') isn't sufficient because
+    // non-null garbage bytes can appear after the null terminator in a reused buffer.
+    private static string HidStringToString(char[] buf)
+    {
+        int end = Array.IndexOf(buf, '\0');
+        return end > 0 ? new string(buf, 0, end) : "";
+    }
 
     // ── Enumeration: CM_Get_Device_ID_ListW ───────────────────────────────────────
 

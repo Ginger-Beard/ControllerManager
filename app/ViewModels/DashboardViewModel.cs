@@ -110,7 +110,11 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
     {
         if (_selectedProfile is null) return;
         ActivityLog.Clear();
-        _orchestrator.Start(_selectedProfile);
+        // Always load a fresh copy from disk so profile changes saved in the
+        // Games tab are picked up without needing a Dashboard refresh.
+        var fresh = _profileStore.Load().FirstOrDefault(p => p.Id == _selectedProfile.Id)
+                    ?? _selectedProfile;
+        _orchestrator.Start(fresh);
     }
 
     private void OnStateChanged(object? _, OrchestratorState state)
