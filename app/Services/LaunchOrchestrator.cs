@@ -248,30 +248,33 @@ public sealed class LaunchOrchestrator : IDisposable
         // sibling HID interfaces — composite devices need every MI_NN child revealed.
         var allDevices = _enumerator.GetAll(showAllHid: false);
 
-        var revealed   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var phaseStart = DateTime.UtcNow;
-        var lastRevealAtS = 0; // seconds since phaseStart of the most recent reveal
+        var revealed       = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var phaseStart     = DateTime.UtcNow;
+        double lastRevealAtMs = 0; // ms since phaseStart of the most recent reveal
 
         foreach (var dev in profile.DisableThenRestore)
         {
             ct.ThrowIfCancellationRequested();
 
             // Target time = max(device's configured time, time of previous reveal).
-            // Then wait until target.
-            var targetAtS = Math.Max(Math.Max(0, dev.DelaySeconds), lastRevealAtS);
-            var elapsedS  = (int)(DateTime.UtcNow - phaseStart).TotalSeconds;
-            var waitS     = targetAtS - elapsedS;
+            // All math in milliseconds so devices can be packed within the game's
+            // hot-plug detection window (some games stop accepting new HID arrivals
+            // a few seconds into the session — a sub-second reveal stride avoids
+            // running past that window when there are many devices).
+            var targetAtMs = Math.Max(Math.Max(0, dev.DelaySeconds * 1000.0), lastRevealAtMs);
+            var elapsedMs  = (DateTime.UtcNow - phaseStart).TotalMilliseconds;
+            var waitMs     = targetAtMs - elapsedMs;
 
-            if (waitS > 0)
+            if (waitMs > 0)
             {
-                LogVerbose($"  Waiting {waitS}s (until T+{targetAtS}s) before revealing {dev.FriendlyName}...");
-                await Task.Delay(waitS * 1000, ct);
+                LogVerbose($"  Waiting {waitMs / 1000.0:0.##}s (until T+{targetAtMs / 1000.0:0.##}s) before revealing {dev.FriendlyName}...");
+                await Task.Delay((int)waitMs, ct);
             }
 
-            Log($"  Revealing: {dev.FriendlyName}  (T+{targetAtS}s)");
+            Log($"  Revealing: {dev.FriendlyName}  (T+{targetAtMs / 1000.0:0.##}s)");
             foreach (var id in ExpandToChildren([dev.InstanceId], allDevices))
                 revealed.Add(id);
-            lastRevealAtS = targetAtS;
+            lastRevealAtMs = targetAtMs;
 
             // Remaining = everything that was hidden at session start, minus what's revealed so far.
             // This preserves unassigned and Always-Hidden devices as hidden throughout.

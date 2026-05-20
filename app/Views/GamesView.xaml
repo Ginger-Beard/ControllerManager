@@ -101,7 +101,7 @@
                 <TextBlock Foreground="#888" FontStyle="Italic" FontSize="11"
                            VerticalAlignment="Center" Margin="8,0,0,0"
                            TextTrimming="CharacterEllipsis"
-                           Text="Drag ☰ to reorder. The number on each Reveal-After-Start row is when it appears (seconds after game launch)."/>
+                           Text="Drag ☰ to reorder. Times are absolute seconds from game launch (decimals OK)."/>
             </DockPanel>
 
             <!-- ── Assignments list (resizable, drag-drop reorderable) ────── -->
@@ -161,9 +161,12 @@
                                                         Converter={StaticResource BoolVisConverter}}">
                                             <TextBlock Text="T+" VerticalAlignment="Center" Margin="0,0,1,0"
                                                        Foreground="#888" FontSize="11"/>
-                                            <TextBox Width="32" VerticalContentAlignment="Center"
-                                                     Text="{Binding DelaySeconds, UpdateSourceTrigger=PropertyChanged}"
-                                                     ToolTip="Seconds after game launch when this device should be revealed. List order is the reveal order — if a later device has a smaller number, it reveals right after the previous one (its number is treated as a minimum). Set the first Reveal-After-Start device to 5+ for FFB games (Forza, etc.) so the wheel claims slot #1 before anything else appears."/>
+                                            <TextBox Width="40" VerticalContentAlignment="Center"
+                                                     Text="{Binding DelaySeconds,
+                                                                    UpdateSourceTrigger=LostFocus,
+                                                                    StringFormat={}{0:0.###},
+                                                                    ConverterCulture=en-US}"
+                                                     ToolTip="Seconds after game launch when this device should be revealed. Decimals work — &quot;10.5&quot; or &quot;10.250&quot; are fine. List order is the reveal order; a later device with a smaller number reveals right after the previous one. Set the first Reveal-After-Start device big enough to let the wheel claim slot #1 first (5–10s for Forza, more if your wheel driver is slow); pack subsequent reveals close together (e.g. 10.0, 10.1, 10.2) so they all land inside the game's hot-plug window."/>
                                             <TextBlock Text="s" VerticalAlignment="Center" Margin="1,0,0,0"/>
                                         </StackPanel>
 

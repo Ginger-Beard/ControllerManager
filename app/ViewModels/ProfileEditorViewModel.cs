@@ -239,7 +239,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
             ? p.InitialDelaySeconds
             : (p.TriggerMode == TriggerMode.Timer ? p.TimerSeconds : 0);
 
-        int[] migratedDelays;
+        double[] migratedDelays;
         if (p.DisableThenRestore.Count == 0)
         {
             migratedDelays = [];
@@ -247,7 +247,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         else if (p.SchemaVersion < 1)
         {
             // schema 0 → 2: shift + cumulative sum
-            migratedDelays = new int[p.DisableThenRestore.Count];
+            migratedDelays = new double[p.DisableThenRestore.Count];
             migratedDelays[0] = legacyInitial;
             for (int i = 1; i < p.DisableThenRestore.Count; i++)
                 migratedDelays[i] = migratedDelays[i - 1] + p.DisableThenRestore[i - 1].DelaySeconds;
@@ -255,7 +255,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         else if (p.SchemaVersion < 2)
         {
             // schema 1 → 2: cumulative sum
-            migratedDelays = new int[p.DisableThenRestore.Count];
+            migratedDelays = new double[p.DisableThenRestore.Count];
             migratedDelays[0] = p.DisableThenRestore[0].DelaySeconds;
             for (int i = 1; i < p.DisableThenRestore.Count; i++)
                 migratedDelays[i] = migratedDelays[i - 1] + p.DisableThenRestore[i].DelaySeconds;
@@ -270,7 +270,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         foreach (var a in Assignments) a.PropertyChanged -= OnAssignmentPropertyChanged;
         Assignments.Clear();
 
-        void Add(DeviceRef d, DeviceRole role, int delay = 0)
+        void Add(DeviceRef d, DeviceRole role, double delay = 0)
         {
             var vm = new DeviceAssignmentViewModel(d.InstanceId, d.FriendlyName, role, delay);
             vm.PropertyChanged += OnAssignmentPropertyChanged;

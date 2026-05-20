@@ -73,8 +73,13 @@ public class DeviceRef
     [JsonPropertyName("friendlyName")]
     public string FriendlyName { get; set; } = "";
 
+    /// <summary>
+    /// Absolute reveal time in seconds from start of the reveal phase, with
+    /// sub-second precision. Old integer values still parse (JSON numbers
+    /// are double-typed).
+    /// </summary>
     [JsonPropertyName("delaySeconds")]
-    public int DelaySeconds { get; set; } = 0;
+    public double DelaySeconds { get; set; } = 0;
 }
 
 public enum TriggerMode { HandleWatcher, Timer }

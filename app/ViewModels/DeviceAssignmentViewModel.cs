@@ -22,8 +22,8 @@ public sealed class DeviceAssignmentViewModel : ViewModelBase
         set { if (Set(ref _role, value)) OnPropertyChanged(nameof(IsRevealAfterStart)); }
     }
 
-    private int _delaySeconds;
-    public int DelaySeconds
+    private double _delaySeconds;
+    public double DelaySeconds
     {
         get => _delaySeconds;
         set => Set(ref _delaySeconds, Math.Max(0, value));
@@ -32,7 +32,7 @@ public sealed class DeviceAssignmentViewModel : ViewModelBase
     public bool IsRevealAfterStart => Role == DeviceRole.RevealAfterStart;
 
     public DeviceAssignmentViewModel(string instanceId, string friendlyName,
-                                     DeviceRole role, int delaySeconds = 0)
+                                     DeviceRole role, double delaySeconds = 0)
     {
         InstanceId    = instanceId;
         FriendlyName  = friendlyName;
