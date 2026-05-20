@@ -67,12 +67,15 @@ public sealed class TrayService : IDisposable
 
         foreach (var profile in profiles.Load())
         {
-            var p    = profile;
-            var item = new System.Windows.Forms.ToolStripMenuItem($"▶  {p.Name}");
+            var profileId = profile.Id;
+            var item      = new System.Windows.Forms.ToolStripMenuItem($"▶  {profile.Name}");
             item.Click += (_, _) =>
             {
-                if (!orchestrator.IsRunning)
-                    orchestrator.Start(p);
+                if (orchestrator.IsRunning) return;
+                // Re-load from disk at click time. Menu could have been open for a
+                // while; the profile could have been deleted/renamed in between.
+                var fresh = profiles.Load().FirstOrDefault(x => x.Id == profileId);
+                if (fresh is not null) orchestrator.Start(fresh);
             };
             menu.Items.Add(item);
         }

@@ -103,8 +103,19 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
         _orchestrator.StateChanged   += OnStateChanged;
         _orchestrator.ActivityLogged += OnActivityLogged;
 
+        // Pick up Games-tab add/delete/rename so the dropdown reflects reality.
+        // Marshaled to the UI thread because ProfileStore.Save can be called
+        // from background tasks (the heal-on-select Task.Run path).
+        _profileStore.Changed += OnProfileStoreChanged;
+
         RefreshProfiles();
         RefreshGamingDevices();
+    }
+
+    private void OnProfileStoreChanged()
+    {
+        if (Application.Current is null) return;
+        Application.Current.Dispatcher.Invoke(RefreshProfiles);
     }
 
     private void RefreshGamingDevices()
@@ -133,10 +144,19 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
     {
         if (_selectedProfile is null) return;
         ActivityLog.Clear();
+
         // Always load a fresh copy from disk so profile changes saved in the
         // Games tab are picked up without needing a Dashboard refresh.
-        var fresh = _profileStore.Load().FirstOrDefault(p => p.Id == _selectedProfile.Id)
-                    ?? _selectedProfile;
+        // If it's gone from disk (deleted in Games tab while still selected in
+        // the Dashboard dropdown), refuse to launch — we used to silently fall
+        // back to the stale in-memory copy and run a deleted profile.
+        var fresh = _profileStore.Load().FirstOrDefault(p => p.Id == _selectedProfile.Id);
+        if (fresh is null)
+        {
+            StatusText = $"Profile '{_selectedProfile.Name}' no longer exists. Pick another.";
+            RefreshProfiles(); // resync the dropdown so the ghost selection clears
+            return;
+        }
         _orchestrator.Start(fresh);
     }
 
@@ -208,5 +228,6 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
         // Orchestrator is owned by App (shared with tray/process-watcher) — don't dispose it.
         _orchestrator.StateChanged   -= OnStateChanged;
         _orchestrator.ActivityLogged -= OnActivityLogged;
+        _profileStore.Changed        -= OnProfileStoreChanged;
     }
 }
