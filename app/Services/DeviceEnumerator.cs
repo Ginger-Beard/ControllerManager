@@ -195,6 +195,8 @@ public sealed class DeviceEnumerator
                 DeviceInterfacePath   = primary.Link,
                 AxisCount             = primary.Info.AxisCount,
                 ButtonCount           = primary.Info.ButtonCount,
+                UsagePage             = primary.Info.UsagePage,
+                Usage                 = primary.Info.Usage,
                 AlternativeInstanceId = altId ?? "",
                 ChildInstanceIds      = children,
             });

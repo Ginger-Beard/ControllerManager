@@ -93,7 +93,7 @@
 
                 <!-- Acquisition trigger: timer vs. detect-first-device-open -->
                 <DockPanel Margin="0,4,0,0"
-                           ToolTip="When to start revealing the Reveal-After-Start devices.&#x0a;&#x0a;• Fixed time per device — wait the T+Xs configured on each row.&#x0a;• When game opens first device — kernel ETW watches for the game's first HID device open and triggers the reveal sequence immediately. Eliminates per-game timing tuning for FFB-sensitive games with a hard detection window. Falls back to the timer if ETW doesn't signal within 30s.">
+                           ToolTip="When to start revealing the Reveal-After-Start devices.&#x0a;&#x0a;• Fixed time per device — wait the T+Xs configured on each row.&#x0a;• When game opens first device — kernel ETW watches for the game opening one of the Always-Visible devices and triggers the reveal sequence after a short grace period. Eliminates per-game timing tuning for FFB-sensitive games with a hard detection window. Falls back to the timer if ETW doesn't signal within 30s.">
                     <TextBlock DockPanel.Dock="Left" Text="Reveal trigger:"
                                VerticalAlignment="Center" Margin="0,0,6,0"/>
                     <ComboBox ItemsSource="{x:Static vm:ProfileEditorViewModel.AcquisitionTriggers}"
@@ -101,6 +101,24 @@
                               SelectedValuePath="Mode"
                               DisplayMemberPath="Label"
                               HorizontalAlignment="Left" MinWidth="220"/>
+                </DockPanel>
+
+                <!-- Post-acquisition grace period — only meaningful in FirstDeviceOpened mode -->
+                <DockPanel Margin="0,4,0,0"
+                           Visibility="{Binding Editor.IsAcquisitionMode,
+                               Converter={StaticResource BoolVisConverter}}"
+                           ToolTip="Wait this many seconds AFTER the game opens its first Always-Visible device, before revealing the Reveal-After-Start devices.&#x0a;&#x0a;The game's slot-#1 decision happens some time after it first opens a controller — if other devices arrive during that window they can steal slot #1. 1.5s is a safe default; increase if your game still misassigns slot #1, decrease if your game commits faster (rarely needed).">
+                    <TextBlock DockPanel.Dock="Left" Text="Wait after first device opened:"
+                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBlock DockPanel.Dock="Right" Text="s"
+                               VerticalAlignment="Center" Margin="2,0,0,0"/>
+                    <TextBox DockPanel.Dock="Right" Width="48" VerticalContentAlignment="Center"
+                             HorizontalAlignment="Left"
+                             Text="{Binding Editor.PostAcquisitionDelaySeconds,
+                                            UpdateSourceTrigger=LostFocus,
+                                            StringFormat={}{0:0.###},
+                                            ConverterCulture=en-US}"/>
+                    <Border/>
                 </DockPanel>
             </StackPanel>
 

@@ -110,7 +110,7 @@ public sealed class LaunchOrchestrator : IDisposable
             if (profile.DisableThenRestore.Count > 0)
             {
                 if (profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened)
-                    await WaitForFirstDeviceOpen(gameProc.Id, ct);
+                    await WaitForFirstDeviceOpen(profile, gameProc.Id, ct);
 
                 await RevealDisableThenRestore(profile, ct);
                 ct.ThrowIfCancellationRequested();
@@ -153,12 +153,27 @@ public sealed class LaunchOrchestrator : IDisposable
         // sibling interfaces of the same physical device — composite controllers with
         // multiple HID interfaces (MI_00 + MI_01 etc) need every child explicitly
         // hidden, since HidHide's kernel filter does direct string compare.
-        var allDevices = _enumerator.GetAll(showAllHid: false);
+        //
+        // Enumerate the FULL HID device set, not just the strict gaming-class filter.
+        // The strict filter (UsagePage 0x05 or UsagePage 0x01+Usage 0x04/0x05) misses
+        // devices declared with vendor-defined pages, multi-axis usage (0x08), or
+        // other off-spec descriptors — but games will happily treat any of those as
+        // a "controller" and assign them a slot. If those weren't in our hide list,
+        // they stayed visible at game launch and could grab slot #1 ahead of the
+        // configured AlwaysVisible device.
+        //
+        // We then filter out keyboards and mice (no game will assign them as a
+        // controller slot, and hiding text input mid-game would be catastrophic)
+        // and devices with no inputs (Lian Li fans, audio devices, USB hubs that
+        // present as HID — can't compete for a controller slot anyway).
+        var allDevices = _enumerator.GetAll(showAllHid: true);
 
         var keepIds = ExpandToChildren(profile.KeepEnabled.Select(d => d.InstanceId), allDevices);
 
         var toHide = allDevices
             .Where(d => !keepIds.Contains(d.InstanceId))
+            .Where(d => !d.IsKeyboardOrMouse)
+            .Where(d => d.AxisCount > 0 || d.ButtonCount > 0) // skip devices with no inputs
             .SelectMany(d => d.ChildInstanceIds.Count > 0 ? d.ChildInstanceIds : [d.InstanceId])
             .ToList();
 
@@ -245,35 +260,68 @@ public sealed class LaunchOrchestrator : IDisposable
     /// for the per-device T+Xs values. On any ETW failure, we fall through with
     /// _firstDeviceAcquired = false and the reveal phase behaves like Timer mode.
     /// </summary>
-    private async Task WaitForFirstDeviceOpen(int gamePid, CancellationToken ct)
+    private async Task WaitForFirstDeviceOpen(Profile profile, int gamePid, CancellationToken ct)
     {
         State = OrchestratorState.RestoringDevices; // status text reads "Revealing devices…" while we wait
+
+        // Resolve current device interface paths for the AlwaysVisible set —
+        // those are the only opens that count as acquisition.
+        var allDevices    = _enumerator.GetAll(showAllHid: true);
+        var watchedPaths  = new List<string>();
+        var alwaysVisible = profile.KeepEnabled.Select(d => d.InstanceId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var d in allDevices)
+        {
+            if (!alwaysVisible.Contains(d.InstanceId)) continue;
+            if (!string.IsNullOrEmpty(d.DeviceInterfacePath))
+                watchedPaths.Add(d.DeviceInterfacePath);
+        }
+
+        if (watchedPaths.Count == 0)
+        {
+            Log("Acquisition trigger: no Always-Visible devices to watch — falling back to timer.");
+            return;
+        }
 
         using var watcher = new FirstDeviceAcquisitionWatcher();
         var tcs = new TaskCompletionSource();
         watcher.Acquired += () => tcs.TrySetResult();
 
-        if (!watcher.Start(gamePid))
+        if (!watcher.Start(gamePid, watchedPaths))
         {
             Log("Acquisition trigger: ETW unavailable — falling back to timer.");
             return;
         }
 
-        Log("Acquisition trigger: waiting for game to open first device...");
-        // 30s timeout protects against games that don't open any HID device (some
-        // games that get nothing visible at startup may never trigger), or ETW
-        // sessions that silently lose events. Falls through to timer-based reveal.
+        Log("Acquisition trigger: waiting for game to open its first watched device...");
+        // 30s timeout protects against games that don't open any HID device, or
+        // ETW sessions that silently lose events. Falls through to timer-based
+        // reveal (which uses the per-device T+Xs values).
         var timeout = Task.Delay(TimeSpan.FromSeconds(30), ct);
         var winner  = await Task.WhenAny(tcs.Task, timeout);
 
-        if (winner == tcs.Task)
+        if (winner != tcs.Task)
         {
-            _firstDeviceAcquired = true;
-            Log("Acquisition signal received — revealing remaining devices now.");
+            Log("Acquisition trigger timed out after 30s — falling back to timer.");
+            watcher.Stop();
+            return;
+        }
+
+        _firstDeviceAcquired = true;
+
+        // Grace period before revealing: the game's slot-#1 decision happens
+        // some milliseconds-to-seconds AFTER it first opens our device. Reveal
+        // too early and other devices show up during that commit window and
+        // steal slot #1. Default 1.5s; profile-configurable.
+        var graceMs = (int)Math.Max(0, profile.PostAcquisitionDelaySeconds * 1000.0);
+        if (graceMs > 0)
+        {
+            Log($"Acquisition signal received — holding {profile.PostAcquisitionDelaySeconds:0.##}s before revealing.");
+            try { await Task.Delay(graceMs, ct); } catch (OperationCanceledException) { throw; }
         }
         else
         {
-            Log("Acquisition trigger timed out after 30s — falling back to timer.");
+            Log("Acquisition signal received — revealing now.");
         }
 
         watcher.Stop();
@@ -295,7 +343,9 @@ public sealed class LaunchOrchestrator : IDisposable
 
         // Re-enumerate so we can expand each DeviceRef.InstanceId to all of its
         // sibling HID interfaces — composite devices need every MI_NN child revealed.
-        var allDevices = _enumerator.GetAll(showAllHid: false);
+        // Use showAllHid: true so the expansion can resolve siblings even for
+        // non-gaming-class devices that HideDevices may have hidden.
+        var allDevices = _enumerator.GetAll(showAllHid: true);
 
         var revealed       = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var phaseStart     = DateTime.UtcNow;

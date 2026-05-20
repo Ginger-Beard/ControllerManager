@@ -14,6 +14,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
     private string _exeName               = "";
     private bool   _processWatcherEnabled = true;
     private AcquisitionTrigger _acquisitionTrigger = AcquisitionTrigger.Timer;
+    private double _postAcquisitionDelaySeconds = 1.5;
     private bool   _isDirty;
     private bool   _showAllHid;
 
@@ -54,11 +55,19 @@ public sealed class ProfileEditorViewModel : ViewModelBase
             {
                 IsDirty = true;
                 OnPropertyChanged(nameof(IsTimerMode));
+                OnPropertyChanged(nameof(IsAcquisitionMode));
             }
         }
     }
 
     public bool IsTimerMode => _acquisitionTrigger == AcquisitionTrigger.Timer;
+    public bool IsAcquisitionMode => _acquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened;
+
+    public double PostAcquisitionDelaySeconds
+    {
+        get => _postAcquisitionDelaySeconds;
+        set { Set(ref _postAcquisitionDelaySeconds, Math.Max(0, value)); IsDirty = true; }
+    }
 
     // For the role dropdown's ItemsSource
     public static IReadOnlyList<AcquisitionTriggerChoice> AcquisitionTriggers { get; } = [
@@ -241,8 +250,9 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         _name                  = p.Name;
         _exePath               = p.GameExecutablePath;
         _exeName               = p.GameExecutableName;
-        _processWatcherEnabled = p.ProcessWatcherEnabled;
-        _acquisitionTrigger    = p.AcquisitionTrigger;
+        _processWatcherEnabled        = p.ProcessWatcherEnabled;
+        _acquisitionTrigger           = p.AcquisitionTrigger;
+        _postAcquisitionDelaySeconds  = p.PostAcquisitionDelaySeconds;
 
         // Migrate to current schema-2 timing semantics (absolute "reveal at T+Xs").
         //
@@ -314,6 +324,8 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         OnPropertyChanged(nameof(ProcessWatcherEnabled));
         OnPropertyChanged(nameof(AcquisitionTrigger));
         OnPropertyChanged(nameof(IsTimerMode));
+        OnPropertyChanged(nameof(IsAcquisitionMode));
+        OnPropertyChanged(nameof(PostAcquisitionDelaySeconds));
         OnPropertyChanged(nameof(HasRevealAfterStart));
     }
 
@@ -352,9 +364,10 @@ public sealed class ProfileEditorViewModel : ViewModelBase
             Name                  = _name,
             GameExecutablePath    = _exePath,
             GameExecutableName    = _exeName,
-            ProcessWatcherEnabled = _processWatcherEnabled,
-            AcquisitionTrigger    = _acquisitionTrigger,
-            KeepEnabled           = keepEnabled,
+            ProcessWatcherEnabled       = _processWatcherEnabled,
+            AcquisitionTrigger          = _acquisitionTrigger,
+            PostAcquisitionDelaySeconds = _postAcquisitionDelaySeconds,
+            KeepEnabled                 = keepEnabled,
             DisableThenRestore    = disableThenRestore,
             KeepDisabled          = keepDisabled,
         };

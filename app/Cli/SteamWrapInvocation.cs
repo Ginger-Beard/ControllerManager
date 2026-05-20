@@ -28,7 +28,10 @@ public static class SteamWrapInvocation
 
         if (hidHide.IsAvailable)
         {
-            var allDevices    = new DeviceEnumerator().GetAll(showAllHid: false);
+            // Use the broad HID enumeration (showAllHid: true) and exclude
+            // keyboards/mice + input-less devices when building the hide set —
+            // see LaunchOrchestrator.HideDevices for the same rationale.
+            var allDevices    = new DeviceEnumerator().GetAll(showAllHid: true);
             var keepPrimaries = profile.KeepEnabled
                 .Select(d => d.InstanceId)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -48,6 +51,8 @@ public static class SteamWrapInvocation
 
             var toHide = allDevices
                 .Where(d => !keepPrimaries.Contains(d.InstanceId))
+                .Where(d => !d.IsKeyboardOrMouse)
+                .Where(d => d.AxisCount > 0 || d.ButtonCount > 0)
                 .SelectMany(d => d.ChildInstanceIds.Count > 0 ? d.ChildInstanceIds : [d.InstanceId])
                 .ToList();
 

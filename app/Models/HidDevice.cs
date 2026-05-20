@@ -17,6 +17,20 @@ public sealed class HidDevice : INotifyPropertyChanged
     public          int    AxisCount           { get; set; }
     public          int    ButtonCount         { get; set; }
 
+    /// <summary>HID top-level UsagePage. 0 if the device couldn't be opened.</summary>
+    public          ushort UsagePage           { get; set; }
+    /// <summary>HID top-level Usage. 0 if the device couldn't be opened.</summary>
+    public          ushort Usage               { get; set; }
+
+    /// <summary>
+    /// True for HID keyboards (UsagePage 1 / Usage 6) and mice (UsagePage 1 /
+    /// Usage 2). Used by the orchestrator to skip these when computing the
+    /// per-session hide list — disabling text input or pointing during a game
+    /// session is obviously a bad outcome.
+    /// </summary>
+    public bool IsKeyboardOrMouse =>
+        UsagePage == 0x01 && (Usage == 0x02 || Usage == 0x06);
+
     /// <summary>
     /// All HID interface instance IDs that belong to the same physical device,
     /// grouped by Windows' <c>DEVPKEY_Device_ContainerId</c>. Always contains at

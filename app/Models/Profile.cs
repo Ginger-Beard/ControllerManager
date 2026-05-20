@@ -63,6 +63,22 @@ public class Profile
     [JsonPropertyName("acquisitionTrigger")]
     public AcquisitionTrigger AcquisitionTrigger { get; set; } = AcquisitionTrigger.Timer;
 
+    /// <summary>
+    /// Seconds to wait AFTER the ETW acquisition signal fires before starting the
+    /// reveal sequence. Only used when <see cref="AcquisitionTrigger"/> is
+    /// <see cref="AcquisitionTrigger.FirstDeviceOpened"/>.
+    ///
+    /// The game's slot-#1 decision happens some time after the game first opens
+    /// a controller file. Empirically (per the developer's MOZA + Forza setup),
+    /// 1s of "always-visible device alone" wasn't enough — game saw new devices
+    /// during its commit phase and picked one of them as slot #1. 2s worked.
+    /// Default 1.5s gives that "alone" window with a little margin; users can
+    /// tune higher if their game commits later or lower if FFB-sensitive game
+    /// commits faster than that.
+    /// </summary>
+    [JsonPropertyName("postAcquisitionDelaySeconds")]
+    public double PostAcquisitionDelaySeconds { get; set; } = 1.5;
+
     [JsonPropertyName("keepEnabled")]
     public List<DeviceRef> KeepEnabled { get; set; } = [];
 
