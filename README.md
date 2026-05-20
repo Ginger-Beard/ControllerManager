@@ -83,20 +83,38 @@ The classic case.
    handbrake, button box, gamepad.
 3. Set roles:
    - Wheel base → **Always Visible**
-   - Pedals → **Reveal After Start**, time: **5s** *(default — gives FH time to
-     commit FFB to the wheel)*
-   - Shifter → **Reveal After Start**, time: **6s**
-   - Handbrake → **Reveal After Start**, time: **7s**
+   - Pedals → **Reveal After Start**
+   - Shifter → **Reveal After Start**
+   - Handbrake → **Reveal After Start**
    - Gamepad → **Always Hidden**
-4. **Save Profile**, then launch by one of the methods below.
+4. Set **Reveal trigger** to **When game opens first device**. (Recommended
+   for FFB games.) Leave **Wait after first device opened** at the 1.5s
+   default for now.
+5. Drag the Reveal-After-Start rows into the order you want them mapped to
+   in-game slots #2, #3, #4. List order = reveal order = in-game order.
+6. **Save Profile**, then launch by one of the methods below.
 
-When FH6 starts, only the wheel is visible. The game does its startup scan, the
-wheel gets slot #1 with FFB, then your pedals and the rest appear in order at the
-times you set.
+When FH6 starts, only the wheel is visible. The game does its warmup, opens
+the wheel file when it's ready, and Controller Manager spots that exact moment
+via kernel ETW. It then waits 1.5 seconds (your "post-acquisition delay") so
+the game has time to lock the wheel as controller slot #1, then reveals your
+pedals, shifter, and handbrake back-to-back. They land within ~500ms in the
+order you arranged them — slots #2, #3, #4.
 
 > **MOZA tip:** turn on **Forza Compatibility Mode** in Pit House so the wheel
 > presents as a Fanatec (VID `0EB7`). FH6 detects Fanatec directly via its native
 > SDK and routes FFB through it cleanly.
+
+> **If wheel still doesn't get slot #1:** bump **Wait after first device opened**
+> to 2.0 or 2.5 seconds. Some games take longer to commit slot assignment after
+> first noticing a controller. Worst case 3s — beyond that, something else is
+> going wrong and worth filing an issue.
+
+> **Alternative — Timer mode:** if ETW gives you trouble (rare), switch the
+> reveal trigger to **Fixed time per device** and set explicit T+Xs values
+> on each row (e.g. pedals 11s, shifter 11.1s, handbrake 11.2s). Decimals
+> work. You'll have to discover the right initial time empirically — for
+> Forza, somewhere between 10s and 13s tends to be the safe window.
 
 ### ② "I run SimHub / Pit House / G HUB and I don't want to break them"
 
@@ -164,8 +182,9 @@ UAC-free thanks to a per-profile scheduled task.
 The **Process Watcher** polls every 500ms for known game executables and triggers
 the profile automatically when one starts. It catches the game very fast but has a
 narrow race window (~0-500ms) where the game might already be enumerating
-controllers. For FFB-sensitive games like Forza, prefer the shortcut or
-in-app Launch path. For everything else, process watcher is enough.
+controllers. Slow-starting games like Forza Horizon have 10+ seconds of warmup
+before they scan for controllers, so the watcher wins that race comfortably. For
+games that scan immediately at startup, prefer the shortcut or in-app Launch path.
 
 > **Steam Launch Options note:** the `--steam-wrap` path still triggers UAC on
 > every launch because Steam needs to pass arguments through to the wrapper.
@@ -247,11 +266,31 @@ known-broken list.
   in Pit House (MOZA) or equivalent in your wheel software.
 - Check that your **wheel base** is set to **Always Visible** in the profile.
 
+**"My wheel ended up as slot #2 (or #3)"**
+- You're in acquisition mode but the game commits slot #1 too slowly for the
+  default grace period. Bump **Wait after first device opened** in the profile
+  editor to 2.0 or 2.5 seconds.
+- If you're in Timer mode, your wheel arrived too close in time to other
+  devices. Spread them out (e.g. wheel always-visible, others starting at T+11s
+  or later) and confirm the wheel is set to **Always Visible** so the game's
+  scan finds it alone.
+
 **"The game doesn't see my pedals after they're supposed to reveal"**
 - The game might not support hot-plug detection (see [Honest limit](#the-honest-limit)).
-- Verify the per-device reveal times in the profile editor — if you set everything
-  to T+0s they all appear at once and the game's startup scan sees them all
-  together, defeating the slot-#1 assignment.
+- In Timer mode, verify the per-device reveal times — if you set everything
+  to T+0s they all appear at once and the game's scan sees them all together,
+  defeating the slot-#1 assignment.
+- The game might have a hard detection cutoff a few seconds after first
+  scanning. Tighten the reveal spread (e.g. all devices within 1s of each
+  other) so nothing falls past the cutoff. Acquisition mode handles this
+  automatically since reveals fire back-to-back.
+
+**"Some devices weren't hidden — the game saw them anyway"**
+- Make sure the device appears in the Games-tab device picker (in the row
+  list, before you add it to the profile). If it shows up in the picker only
+  with **Show all devices** checked, it has no inputs — the orchestrator
+  skips those. If it has inputs, add it to the profile with role **Always
+  Hidden** or just leave it unassigned (unassigned = hidden during session).
 
 **Devices show as off in the Devices tab after I closed the app mid-session**
 - HidHide retains the persistent blacklist across reboots; if Controller Manager

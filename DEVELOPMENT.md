@@ -38,18 +38,67 @@ gaming HID device is visible to DirectInput first at startup. HidHide hooks
 code runs* — no race window. The game's startup scan only sees Always-Visible
 devices; the reveal phase brings the rest online afterward.
 
-### Reveal phase is timer-based (HandleWatcher gone)
+### Reveal phase triggers (HandleWatcher gone)
 HandleWatcher used `NtQueryInformationProcess` + `DuplicateHandle` in a polling
 loop on the game's handle table. EAC and similar anti-cheats kill the calling
 process for that exact pattern — confirmed via FH6 terminating CM externally
 ~60s into a session with no .NET exception logged. Not fixable in user space;
 the DuplicateHandle loop **is** the cheat signature.
 
-Reveal timing now uses a fixed absolute `T+Xs` value per device, stored in
-`DeviceRef.DelaySeconds`. Default for a new Reveal-After-Start device is 5s
-(enough for FH-style startup scans to commit slot #1 to the wheel). List order
-is the reveal order; if a later device has a smaller time, it's clamped to the
-previous device's reveal time and fires right after.
+Two reveal triggers, configurable per profile (`Profile.AcquisitionTrigger`):
+
+1. **Timer mode** (default): each Reveal-After-Start device fires at its
+   configured `DeviceRef.DelaySeconds` — an absolute `T+Xs` measured from the
+   start of the reveal phase. Sub-second precision (it's a `double`). List
+   order is reveal order; if a later device has a smaller time, it's clamped
+   to the previous device's reveal time and fires right after. Default for a
+   new Reveal-After-Start device is 5s.
+
+2. **FirstDeviceOpened mode**: kernel ETW (`Microsoft-Windows-Kernel-File`)
+   watches for the game's PID opening one of the profile's Always-Visible
+   device files. The signal fires once, then the orchestrator holds for
+   `Profile.PostAcquisitionDelaySeconds` (default 1.5s — see "Slot-commit
+   grace period" below) before starting reveals. Per-device times are
+   ignored in this mode; reveals fire back-to-back, paced only by IOCTL
+   latency.
+
+ETW is EAC-safe: it's one-way kernel telemetry, the consumer never touches
+the source process. Anti-cheats use ETW themselves; it's not a cheat vector.
+
+### Slot-commit grace period
+Games that pick controller slot #1 from a HID scan don't commit the
+assignment at the exact moment they first open a controller file. There's a
+window of roughly 1–2 seconds where the game is observing what's visible and
+batching candidate devices before locking in slot assignments. If we reveal
+the other devices during that window, they're candidates too — and PnP
+enumeration order, not arrival order, decides who wins.
+
+Empirical (FH6 + MOZA): with the wheel becoming visible at T+10s, revealing
+others at T+11s = pedals/handbrake got slot #1. Revealing at T+12s = wheel
+got slot #1. So roughly 1.5s of "Always-Visible device alone" is required
+before adding new devices.
+
+`Profile.PostAcquisitionDelaySeconds` (default 1.5s) is exposed in the UI
+under the acquisition-trigger dropdown when FirstDeviceOpened is selected.
+In Timer mode the same effect is achieved by spacing the user-configured
+T+Xs values themselves.
+
+### FirstDeviceAcquisitionWatcher path matching
+The watcher subscribes to `Microsoft-Windows-Kernel-File` via the TraceEvent
+NuGet, filtered to `KernelTraceEventParser.Keywords.FileIOInit`. ETW reports
+file names in NT object form (`\Device\HID00000XX`), not the Win32 symbolic
+link form on `HidDevice.DeviceInterfacePath` (`\\?\HID#…#{guid}`).
+
+`FirstDeviceAcquisitionWatcher.Start(pid, paths)` resolves each Win32 path to
+its NT object name via `NtQueryObject(ObjectNameInformation)` at watch-start
+time, then exact-matches incoming events against that set. Failed opens on
+hidden devices have different paths and are ignored — no NtStatus correlation
+needed. The acquisition event fires exactly once per session (`Interlocked`
+guard on the worker thread).
+
+ETW session name is `ControllerManager_DeviceAcquisition`; stale sessions
+from prior crashes are stopped at Start. 30s timeout falls back to Timer
+mode if no matching open is observed.
 
 ### Reveal phase limit
 Works only for hot-plug-aware games (WGI, RawInput, modern XInput). Pure legacy
@@ -85,6 +134,24 @@ blacklist (Devices-tab toggle, `LaunchOrchestrator.HideDevices`,
 `RevealDisableThenRestore`, `SteamWrapInvocation`) expands to all siblings
 because HidHide's kernel filter does direct string compare with no ancestor
 traversal.
+
+### Hide-list filter (session start)
+The orchestrator enumerates with `showAllHid: true` — the broader HID list,
+not just the strict gaming filter (`UsagePage 0x05` or `0x01/Usage 0x04/0x05`).
+Sim peripherals routinely declare themselves with off-spec usages — SIMAGIC
+handbrakes use Multi-Axis (`0x01/0x08`), some controllers use vendor-defined
+pages — and the strict filter missed them. They'd stay visible at game scan
+time and steal slot #1.
+
+From the broad list, the orchestrator excludes:
+- Keyboards (`HidDevice.IsKeyboardOrMouse`, UsagePage 1 / Usage 6)
+- Mice (UsagePage 1 / Usage 2)
+- Devices with no inputs (`AxisCount == 0 && ButtonCount == 0` — fans,
+  audio devices, USB hubs reporting as HID; can't compete for a controller
+  slot anyway)
+
+`HidDevice` carries `UsagePage` and `Usage` populated by the enumerator so
+this filter doesn't require re-opening HID descriptors at session start.
 
 ### Four supported use cases (settled)
 1. **Forza Horizon / Xbox sim racing** — wheel = AlwaysVisible,
@@ -136,11 +203,18 @@ need explicit user approval and a doc update.
   for keyboard-accessible one-step moves. Drag has a ghost adorner and a green
   insertion line.
 - Per-row role selector (Always Visible / Reveal After Start / Always Hidden)
-  + per-row T+Xs field (only meaningful for Reveal After Start) + per-row
-  Remove.
+  + per-row T+Xs field (only meaningful for Reveal After Start AND only in
+  Timer trigger mode — hidden in FirstDeviceOpened mode where times are
+  ignored) + per-row Remove.
 - First Reveal-After-Start device added auto-defaults to T+5s; users can edit.
+- "Reveal trigger" dropdown selects Timer (default) or FirstDeviceOpened.
+- "Wait after first device opened" field appears in FirstDeviceOpened mode
+  only — drives `PostAcquisitionDelaySeconds`, default 1.5s.
+- "Auto-trigger this profile when the game launches" checkbox drives
+  `ProcessWatcherEnabled`.
 - Save Profile button explicit. "Unsaved changes" indicator visible.
-- Delete Profile requires confirmation.
+- Delete Profile requires confirmation. Per-profile scheduled task created by
+  `ShortcutExporter` is cleaned up on delete via `LaunchTaskManager`.
 
 ### Devices tab
 - Banner: "Devices turned off here are hidden from your entire computer. Use
@@ -196,12 +270,36 @@ NOT in the stock signed driver — see HidHide driver compatibility above.
 ### Profile schema versions
 | Version | Semantics of `DeviceRef.DelaySeconds` |
 |---|---|
-| 0 (legacy) | `Profile.InitialDelaySeconds` + per-device "wait AFTER reveal" |
+| 0 (legacy) | `Profile.InitialDelaySeconds` + per-device "wait AFTER reveal" (int seconds) |
 | 1 | per-device "wait BEFORE reveal" (relative) |
-| 2 (current) | per-device absolute "reveal at T+X seconds from game launch" |
+| 2 (current) | per-device absolute "reveal at T+X seconds from game launch" (double, sub-second precision) |
 
 `ProfileEditorViewModel.LoadProfile` migrates v0 and v1 to v2 on read.
 `ToProfile` always writes v2.
+
+### Profile field reference (v2)
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `id` | Guid | new | Stable identity across renames |
+| `name` | string | "New Profile" | Display + shortcut/task naming |
+| `gameExecutablePath` | string | "" | Launched by Dashboard/shortcut/Steam-wrap |
+| `gameExecutableName` | string | "" | Process name for watcher matching |
+| `schemaVersion` | int | 2 | Migration marker |
+| `acquisitionTrigger` | enum | Timer | `Timer` or `FirstDeviceOpened` |
+| `postAcquisitionDelaySeconds` | double | 1.5 | Grace period after ETW signal (FirstDeviceOpened only) |
+| `processWatcherEnabled` | bool | true | Per-profile gate for the always-running watcher |
+| `keepEnabled[]` | DeviceRef[] | [] | Always Visible devices |
+| `disableThenRestore[]` | DeviceRef[] | [] | Reveal After Start, in order |
+| `keepDisabled[]` | DeviceRef[] | [] | Always Hidden devices |
+
+`DeviceRef`: `{ instanceId, deviceInterfacePath, friendlyName, delaySeconds }`.
+
+### ProfileStore.Changed event
+Fires after every successful Save. Subscribers should re-Load their in-memory
+copy. `DashboardViewModel` subscribes to keep its profile dropdown in sync
+with Games-tab add/delete/rename — both VMs would otherwise drift since they
+each Load independently.
 
 ### IPC operations
 `IpcServer` listens on named pipe `ControllerManager`. Second-instance
@@ -254,6 +352,39 @@ on `IpcServer` (`begin-steam-session` / `end-steam-session`) doing the work
 `GamesViewModel.CopySteamCommandCommand` to emit the launcher path, update the
 release workflow to bundle both exes. ~2 hours.
 
+### Unit tests
+There are none yet. The codebase has grown to the point where regressions in
+the orchestrator timing, schema migration, or composite-HID expansion would
+be hard to catch without automation. High-value areas to test first:
+
+- **Profile schema migration** (`ProfileEditorViewModel.LoadProfile`): v0
+  delays → v2 absolute times, v1 → v2 cumulative sum, v2 round-trips. All
+  three cases have known input/output pairs from real profiles, easy to
+  pin in tests.
+- **Orchestrator reveal timing math**: target time clamping
+  (`max(configured, lastRevealAtMs)`), absolute T+Xs semantics, sub-second
+  precision. Don't need to mock HidHide — extract pure timing logic into
+  a helper that returns `(deviceId, targetMs)` pairs given a profile +
+  acquisition state. Test that.
+- **HidDevice ChildInstanceIds expansion**
+  (`LaunchOrchestrator.ExpandToChildren`): given a list of primary IDs +
+  a device list with sibling children, returns all child IDs. Pure
+  function, trivial to test.
+- **DEVPKEY_Device_ContainerId grouping**: harder because it requires
+  CfgMgr32. Could be tested by injecting a fake enumeration source if
+  `DeviceEnumerator` is refactored to take a "raw HID enumeration"
+  delegate.
+- **NT path resolution in `FirstDeviceAcquisitionWatcher`**: skip — needs
+  a real device handle.
+- **AcquisitionTrigger flow in orchestrator**: refactor `WaitForFirstDeviceOpen`
+  so the ETW watcher is injected (interface), then test the timer-fallback
+  and grace-period logic without ETW.
+
+Recommended setup: separate `app/Tests/ControllerManager.Tests.csproj`
+using xUnit + FluentAssertions. Most of the testable logic is already in
+pure-ish helpers; the orchestrator may need a small refactor to extract
+timing from I/O.
+
 ### Real icon
 `app/app.ico` is a placeholder. Replace with a real multi-size icon (16 / 32 /
 48 / 256). Direction: device-manager-like, since the tool is framed as a
@@ -269,8 +400,18 @@ first run.
 
 ## Testing checklist (no code; before each release)
 
-- **FH6 end-to-end**: confirm no EAC crash with the timer-based reveal; FFB on
-  the wheel; pedals/shifter reveal in order at the configured T+Xs times.
+- **FH6 end-to-end (Timer mode)**: confirm no EAC crash; FFB on the wheel;
+  pedals/shifter reveal in order at the configured T+Xs times.
+- **FH6 end-to-end (FirstDeviceOpened mode)**: same setup but with the
+  acquisition trigger set. Wheel = Always Visible; others = Reveal After
+  Start. Confirm log shows `[Acquisition] Game opened watched device:`
+  followed by reveals 1.5s later. Wheel ends up at slot #1, others queue
+  behind in profile order.
+- **Slot-commit grace tuning**: if wheel still loses slot #1 in FH6, bump
+  `Wait after first device opened` toward 2-3s. Document the working value
+  per game.
+- **Broad hide list**: confirm Logger output during `BeginGameSession`
+  includes off-spec sim devices (SIMAGIC handbrake, etc.) in the hide list.
 - **Sunshine / Apollo**: build a profile while a remote session is active;
   verify the virtual gamepad shows up in the picker; verify physical
   controllers stay hidden during the stream.
@@ -309,8 +450,8 @@ first run.
   /Native            — P/Invoke wrappers (HidApi, NtDll, SetupApi)
   /Services          — Orchestrator, HidHideClient, DeviceEnumerator, ProfileStore,
                        SettingsStore, IpcServer, LaunchTaskManager, ProcessWatcher,
-                       HidInputMonitor, ProfileHealer, ShortcutExporter, TrayService,
-                       Logger
+                       FirstDeviceAcquisitionWatcher (ETW), HidInputMonitor,
+                       ProfileHealer, ShortcutExporter, TrayService, Logger
   /ViewModels        — MVVM view models (one per tab + per editor + per row)
   /Views             — XAML + code-behind
 /tools/DeviceWatcher — Companion CLI for testing hide/show behavior end-to-end
