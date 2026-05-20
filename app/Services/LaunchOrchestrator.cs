@@ -90,9 +90,13 @@ public sealed class LaunchOrchestrator : IDisposable
 
     private async Task RunFlow(Profile profile, CancellationToken ct)
     {
-        ActiveProfile        = profile;
-        _firstDeviceAcquired = false;
+        ActiveProfile             = profile;
+        _firstDeviceAcquired      = false;
+        _firstDeviceAcquiredAtMs  = 0;
         Logger.Write($"[Orchestrator] RunFlow — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.AcquisitionTrigger}");
+
+        FirstDeviceAcquisitionWatcher? watcher = null;
+
         try
         {
             HideDevices(profile, ct);
@@ -107,11 +111,20 @@ public sealed class LaunchOrchestrator : IDisposable
             // anti-cheat-protected processes unnecessarily.
             _hidHide.UpdateSessionGameNtPath(gameProc.Id);
 
+            // In acquisition mode, start the ETW watcher *concurrent* with the reveal
+            // phase. The watcher signal short-circuits the per-device T+Xs waits when
+            // it fires. If the signal never fires (game uses RawInput/WGI, no file
+            // open observable), the reveal phase still proceeds using the user's
+            // per-device T+Xs as the safety net — that's why those fields are kept
+            // in the UI in both modes.
+            if (profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened
+                && profile.DisableThenRestore.Count > 0)
+            {
+                watcher = StartAcquisitionWatcher(profile, gameProc.Id);
+            }
+
             if (profile.DisableThenRestore.Count > 0)
             {
-                if (profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened)
-                    await WaitForFirstDeviceOpen(profile, gameProc.Id, ct);
-
                 await RevealDisableThenRestore(profile, ct);
                 ct.ThrowIfCancellationRequested();
             }
@@ -129,6 +142,7 @@ public sealed class LaunchOrchestrator : IDisposable
         }
         finally
         {
+            try { watcher?.Stop(); watcher?.Dispose(); } catch { }
             // Always clean up the HidHide session — even if the flow threw or was cancelled
             // mid-way (e.g. game launch timeout). Prevents stale session blacklist state.
             _hidHide.EndGameSession();
@@ -249,23 +263,24 @@ public sealed class LaunchOrchestrator : IDisposable
         throw new TimeoutException($"'{procName}.exe' did not start within 60 seconds.");
     }
 
-    // ── Phase 2.5: acquisition signal (optional) ─────────────────────────────────
+    // ── Acquisition watcher (optional, runs concurrent with reveal phase) ───────
 
-    private bool _firstDeviceAcquired;
+    private bool   _firstDeviceAcquired;
+    private double _firstDeviceAcquiredAtMs;   // ms since reveal phase started
 
     /// <summary>
-    /// Wait until ETW reports the game's PID opened its first HID device file,
-    /// or 30 seconds, whichever comes first. Sets <see cref="_firstDeviceAcquired"/>
-    /// so RevealDisableThenRestore can pack reveals back-to-back instead of waiting
-    /// for the per-device T+Xs values. On any ETW failure, we fall through with
-    /// _firstDeviceAcquired = false and the reveal phase behaves like Timer mode.
+    /// Starts the ETW watcher and returns it. The watcher fires
+    /// <see cref="FirstDeviceAcquisitionWatcher.Acquired"/> when the game's PID
+    /// opens any HID device file matching one of the profile's Always-Visible
+    /// devices. The reveal loop short-circuits its per-device T+Xs wait when
+    /// the signal arrives.
+    ///
+    /// Returns null when the watcher can't be started (no resolvable Always-
+    /// Visible paths, ETW session creation failed, etc.) — the reveal phase
+    /// then operates as pure Timer mode using the user's per-device T+Xs.
     /// </summary>
-    private async Task WaitForFirstDeviceOpen(Profile profile, int gamePid, CancellationToken ct)
+    private FirstDeviceAcquisitionWatcher? StartAcquisitionWatcher(Profile profile, int gamePid)
     {
-        State = OrchestratorState.RestoringDevices; // status text reads "Revealing devices…" while we wait
-
-        // Resolve current device interface paths for the AlwaysVisible set —
-        // those are the only opens that count as acquisition.
         var allDevices    = _enumerator.GetAll(showAllHid: true);
         var watchedPaths  = new List<string>();
         var alwaysVisible = profile.KeepEnabled.Select(d => d.InstanceId)
@@ -279,62 +294,50 @@ public sealed class LaunchOrchestrator : IDisposable
 
         if (watchedPaths.Count == 0)
         {
-            Log("Acquisition trigger: no Always-Visible devices to watch — falling back to timer.");
-            return;
+            Log("Acquisition: no Always-Visible devices to watch — per-device T+Xs values control timing.");
+            return null;
         }
 
-        using var watcher = new FirstDeviceAcquisitionWatcher();
-        var tcs = new TaskCompletionSource();
-        watcher.Acquired += () => tcs.TrySetResult();
+        var watcher = new FirstDeviceAcquisitionWatcher();
+
+        // Capture the moment of the signal. The reveal loop tracks
+        // _firstDeviceAcquiredAtMs relative to its own phaseStart, so we record
+        // wall-clock ticks here and let the reveal loop convert.
+        var startTicks = DateTime.UtcNow.Ticks;
+        watcher.Acquired += () =>
+        {
+            var elapsedMs = (DateTime.UtcNow.Ticks - startTicks) / TimeSpan.TicksPerMillisecond;
+            _firstDeviceAcquiredAtMs = elapsedMs;
+            _firstDeviceAcquired     = true;
+            Logger.Write($"[Acquisition] Signal fired at watcher-start + {elapsedMs}ms");
+        };
 
         if (!watcher.Start(gamePid, watchedPaths))
         {
-            Log("Acquisition trigger: ETW unavailable — falling back to timer.");
-            return;
+            Log("Acquisition: ETW unavailable — per-device T+Xs values control timing.");
+            watcher.Dispose();
+            return null;
         }
 
-        Log("Acquisition trigger: waiting for game to open its first watched device...");
-        // 30s timeout protects against games that don't open any HID device, or
-        // ETW sessions that silently lose events. Falls through to timer-based
-        // reveal (which uses the per-device T+Xs values).
-        var timeout = Task.Delay(TimeSpan.FromSeconds(30), ct);
-        var winner  = await Task.WhenAny(tcs.Task, timeout);
-
-        if (winner != tcs.Task)
-        {
-            Log("Acquisition trigger timed out after 30s — falling back to timer.");
-            watcher.Stop();
-            return;
-        }
-
-        _firstDeviceAcquired = true;
-
-        // Grace period before revealing: the game's slot-#1 decision happens
-        // some milliseconds-to-seconds AFTER it first opens our device. Reveal
-        // too early and other devices show up during that commit window and
-        // steal slot #1. Default 1.5s; profile-configurable.
-        var graceMs = (int)Math.Max(0, profile.PostAcquisitionDelaySeconds * 1000.0);
-        if (graceMs > 0)
-        {
-            Log($"Acquisition signal received — holding {profile.PostAcquisitionDelaySeconds:0.##}s before revealing.");
-            try { await Task.Delay(graceMs, ct); } catch (OperationCanceledException) { throw; }
-        }
-        else
-        {
-            Log("Acquisition signal received — revealing now.");
-        }
-
-        watcher.Stop();
+        Log("Acquisition watcher started. Per-device T+Xs serve as safety net if ETW doesn't fire.");
+        return watcher;
     }
 
     // ── Phase 3: reveal devices one by one ───────────────────────────────────────
     //
-    // DeviceRef.DelaySeconds is now an ABSOLUTE time from when this phase started
-    // (effectively "seconds after game launch + hide-setup"). The first device's
-    // value gates FFB-sensitive games: the wheel has time to claim slot #1 before
-    // any other device is revealed. List order is the reveal order; if a device's
-    // delay is less than the previous one's actual reveal time, it reveals
-    // immediately after the previous (clamped).
+    // DeviceRef.DelaySeconds is an ABSOLUTE time from when this phase started
+    // (effectively "seconds after game launch + hide-setup"). Two paths through
+    // the same loop:
+    //
+    //   • Timer mode (no acquisition signal): each reveal waits until T+Xs, then
+    //     fires. List order + clamping ensures monotonically increasing reveals.
+    //
+    //   • Acquisition signal short-circuit: while we're waiting on a device's
+    //     T+Xs, if the ETW watcher fires, we cut the wait short, apply the post-
+    //     acquisition grace period once, then fire all remaining reveals
+    //     back-to-back. The user's T+Xs values become a safety net — if ETW
+    //     never fires (game uses RawInput/WGI/etc.), the reveals still happen
+    //     at the configured times rather than running 30s late.
 
     private async Task RevealDisableThenRestore(Profile profile, CancellationToken ct)
     {
@@ -349,36 +352,62 @@ public sealed class LaunchOrchestrator : IDisposable
 
         var revealed       = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var phaseStart     = DateTime.UtcNow;
-        double lastRevealAtMs = 0; // ms since phaseStart of the most recent reveal
+        double lastRevealAtMs = 0;
+        bool   acquisitionHandled = false; // true once we've applied the post-signal grace
 
         foreach (var dev in profile.DisableThenRestore)
         {
             ct.ThrowIfCancellationRequested();
 
-            // In acquisition mode, the per-device T+Xs values are meaningless —
-            // we're already in the game's detection window and need to pack
-            // reveals back-to-back before the window closes. Fire as fast as
-            // IOCTLs allow, in profile list order (which determines slot order).
             double targetAtMs;
-            if (_firstDeviceAcquired)
+            if (_firstDeviceAcquired && acquisitionHandled)
             {
-                targetAtMs = lastRevealAtMs; // no wait beyond IOCTL latency
+                // Signal already fired and grace applied — pack remaining reveals
+                // back-to-back, paced only by IOCTL latency.
+                targetAtMs = lastRevealAtMs;
             }
             else
             {
-                // Target time = max(device's configured time, time of previous reveal).
-                // All math in milliseconds so devices can be packed within the game's
-                // hot-plug detection window.
+                // Either no signal yet (or we're checking before it arrives), or
+                // signal just fired and we haven't yet applied the grace period.
+                // Default target = max(user T+Xs, previous reveal).
                 targetAtMs = Math.Max(Math.Max(0, dev.DelaySeconds * 1000.0), lastRevealAtMs);
             }
 
-            var elapsedMs = (DateTime.UtcNow - phaseStart).TotalMilliseconds;
-            var waitMs    = targetAtMs - elapsedMs;
-
-            if (waitMs > 0)
+            // Wait until target — but ALSO wake immediately if acquisition fires
+            // during the wait. Poll _firstDeviceAcquired in a short loop instead
+            // of one big Task.Delay so we can react to the signal without a
+            // CancellationToken-style plumbing through the watcher.
+            while (true)
             {
-                LogVerbose($"  Waiting {waitMs / 1000.0:0.##}s (until T+{targetAtMs / 1000.0:0.##}s) before revealing {dev.FriendlyName}...");
-                await Task.Delay((int)waitMs, ct);
+                ct.ThrowIfCancellationRequested();
+
+                if (_firstDeviceAcquired && !acquisitionHandled)
+                {
+                    // Signal just arrived. Apply the post-acquisition grace once,
+                    // then short-circuit this device + everything after it.
+                    var graceMs = (int)Math.Max(0, profile.PostAcquisitionDelaySeconds * 1000.0);
+                    if (graceMs > 0)
+                    {
+                        Log($"Acquisition signal received — holding {profile.PostAcquisitionDelaySeconds:0.##}s grace before revealing remaining devices.");
+                        await Task.Delay(graceMs, ct);
+                    }
+                    else
+                    {
+                        Log("Acquisition signal received — revealing remaining devices now.");
+                    }
+                    acquisitionHandled = true;
+                    targetAtMs = (DateTime.UtcNow - phaseStart).TotalMilliseconds;
+                    break;
+                }
+
+                var elapsedMs = (DateTime.UtcNow - phaseStart).TotalMilliseconds;
+                var waitMs    = targetAtMs - elapsedMs;
+                if (waitMs <= 0) break;
+
+                // 250ms granularity: short enough to react to the ETW signal
+                // promptly, long enough that we're not busy-looping.
+                await Task.Delay(Math.Min(250, (int)waitMs), ct);
             }
 
             Log($"  Revealing: {dev.FriendlyName}  (T+{targetAtMs / 1000.0:0.##}s)");

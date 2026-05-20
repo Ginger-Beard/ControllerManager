@@ -96,10 +96,16 @@ The classic case.
 
 When FH6 starts, only the wheel is visible. The game does its warmup, opens
 the wheel file when it's ready, and Controller Manager spots that exact moment
-via kernel ETW. It then waits 1.5 seconds (your "post-acquisition delay") so
-the game has time to lock the wheel as controller slot #1, then reveals your
-pedals, shifter, and handbrake back-to-back. They land within ~500ms in the
-order you arranged them — slots #2, #3, #4.
+via kernel ETW — then waits 1.5 seconds (your "post-acquisition delay") so the
+game has time to lock the wheel as controller slot #1 before revealing the
+rest.
+
+**Also set per-device T+Xs values as a safety net.** Some games (especially
+those using RawInput or WGI) don't open the device file directly, so the ETW
+signal never fires. In that case the T+Xs values control timing. Use values
+that would work in Timer mode (for Forza-style: ~11s on the first, 11.1, 11.2
+on the others) — if ETW fires earlier, the reveals just happen sooner. The
+T+Xs is the upper bound, not the target.
 
 > **MOZA tip:** turn on **Forza Compatibility Mode** in Pit House so the wheel
 > presents as a Fanatec (VID `0EB7`). FH6 detects Fanatec directly via its native
@@ -110,11 +116,12 @@ order you arranged them — slots #2, #3, #4.
 > first noticing a controller. Worst case 3s — beyond that, something else is
 > going wrong and worth filing an issue.
 
-> **Alternative — Timer mode:** if ETW gives you trouble (rare), switch the
-> reveal trigger to **Fixed time per device** and set explicit T+Xs values
-> on each row (e.g. pedals 11s, shifter 11.1s, handbrake 11.2s). Decimals
-> work. You'll have to discover the right initial time empirically — for
-> Forza, somewhere between 10s and 13s tends to be the safe window.
+> **If reveals never happen at all (logs show no acquisition signal):** the
+> game probably uses RawInput or WGI and doesn't call CreateFile on the device
+> file. The per-device T+Xs values still control timing in that case — make
+> sure they're set sensibly (e.g. 11s, 11.1s, 11.2s for Forza). The acquisition
+> signal is an early-fire optimization on top of the timer; the timer is the
+> source of truth.
 
 ### ② "I run SimHub / Pit House / G HUB and I don't want to break them"
 

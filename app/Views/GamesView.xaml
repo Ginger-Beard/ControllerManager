@@ -93,7 +93,7 @@
 
                 <!-- Acquisition trigger: timer vs. detect-first-device-open -->
                 <DockPanel Margin="0,4,0,0"
-                           ToolTip="When to start revealing the Reveal-After-Start devices.&#x0a;&#x0a;• Fixed time per device — wait the T+Xs configured on each row.&#x0a;• When game opens first device — kernel ETW watches for the game opening one of the Always-Visible devices and triggers the reveal sequence after a short grace period. Eliminates per-game timing tuning for FFB-sensitive games with a hard detection window. Falls back to the timer if ETW doesn't signal within 30s.">
+                           ToolTip="When to start revealing the Reveal-After-Start devices.&#x0a;&#x0a;• Fixed time per device — strict T+Xs timing on each row.&#x0a;• When game opens first device — kernel ETW watches for the game opening one of the Always-Visible devices, then reveals everything after a short grace period. The per-device T+Xs values stay as a safety net upper bound in case the game uses RawInput/WGI and never opens device files directly.">
                     <TextBlock DockPanel.Dock="Left" Text="Reveal trigger:"
                                VerticalAlignment="Center" Margin="0,0,6,0"/>
                     <ComboBox ItemsSource="{x:Static vm:ProfileEditorViewModel.AcquisitionTriggers}"
@@ -130,18 +130,8 @@
                        FontWeight="SemiBold" Padding="0"/>
                 <TextBlock Foreground="#888" FontStyle="Italic" FontSize="11"
                            VerticalAlignment="Center" Margin="8,0,0,0"
-                           TextTrimming="CharacterEllipsis">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="Text" Value="Drag ☰ to reorder. Reveals fire as soon as the game opens its first device — times below are ignored."/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding Editor.IsTimerMode}" Value="True">
-                                    <Setter Property="Text" Value="Drag ☰ to reorder. Times are absolute seconds from game launch (decimals OK)."/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+                           TextTrimming="CharacterEllipsis"
+                           Text="Drag ☰ to reorder. Times are absolute seconds from game launch (decimals OK)."/>
             </DockPanel>
 
             <!-- ── Assignments list (resizable, drag-drop reorderable) ────── -->
@@ -190,12 +180,12 @@
                                                    TextTrimming="CharacterEllipsis"
                                                    Margin="0,0,8,0"/>
 
-                                        <!-- Reveal time: absolute seconds from game launch. Visible only
-                                             for RevealAfterStart rows AND only when the profile is in Timer
-                                             mode (in acquisition mode, all reveals fire back-to-back the
-                                             instant the game opens its first device, so per-device times
-                                             would mislead). Column reserves width either way so the role
-                                             dropdown doesn't shift. -->
+                                        <!-- Reveal time: absolute seconds from game launch. Visible for
+                                             RevealAfterStart rows in both modes — in acquisition mode, the
+                                             values act as a safety net upper bound if the ETW signal doesn't
+                                             fire (some games use RawInput/WGI and never open the device file
+                                             directly, so the signal never arrives). Column reserves width
+                                             either way so the role dropdown doesn't shift. -->
                                         <StackPanel Grid.Column="2"
                                                     Orientation="Horizontal"
                                                     HorizontalAlignment="Right"
@@ -205,13 +195,9 @@
                                                 <Style TargetType="StackPanel">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                     <Style.Triggers>
-                                                        <MultiDataTrigger>
-                                                            <MultiDataTrigger.Conditions>
-                                                                <Condition Binding="{Binding IsRevealAfterStart}" Value="True"/>
-                                                                <Condition Binding="{Binding DataContext.Editor.IsTimerMode, RelativeSource={RelativeSource AncestorType=UserControl}}" Value="True"/>
-                                                            </MultiDataTrigger.Conditions>
+                                                        <DataTrigger Binding="{Binding IsRevealAfterStart}" Value="True">
                                                             <Setter Property="Visibility" Value="Visible"/>
-                                                        </MultiDataTrigger>
+                                                        </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </StackPanel.Style>
@@ -222,7 +208,7 @@
                                                                     UpdateSourceTrigger=LostFocus,
                                                                     StringFormat={}{0:0.###},
                                                                     ConverterCulture=en-US}"
-                                                     ToolTip="Seconds after game launch when this device should be revealed. Decimals work — &quot;10.5&quot; or &quot;10.250&quot; are fine. List order is the reveal order; a later device with a smaller number reveals right after the previous one. Set the first Reveal-After-Start device big enough to let the wheel claim slot #1 first (5–10s for Forza, more if your wheel driver is slow); pack subsequent reveals close together (e.g. 10.0, 10.1, 10.2) so they all land inside the game's hot-plug window."/>
+                                                     ToolTip="Seconds after game launch when this device should be revealed (decimals OK).&#x0a;&#x0a;In acquisition mode this also acts as a SAFETY NET: if the game uses RawInput or WGI and never opens its device files directly, the ETW signal never fires — these values then control timing. Pick numbers that would work in pure Timer mode (for Forza-style: first device at ~11s, others at 11.1, 11.2, etc).&#x0a;&#x0a;If the acquisition signal does fire, reveals happen sooner — the times here become an upper bound, not a target."/>
                                             <TextBlock Text="s" VerticalAlignment="Center" Margin="1,0,0,0"/>
                                         </StackPanel>
 

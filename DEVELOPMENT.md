@@ -45,22 +45,31 @@ process for that exact pattern — confirmed via FH6 terminating CM externally
 ~60s into a session with no .NET exception logged. Not fixable in user space;
 the DuplicateHandle loop **is** the cheat signature.
 
-Two reveal triggers, configurable per profile (`Profile.AcquisitionTrigger`):
+Two reveal triggers, configurable per profile (`Profile.AcquisitionTrigger`).
+Both honor per-device `DeviceRef.DelaySeconds` (absolute `T+Xs` from reveal
+phase start, double precision); they differ in how they treat the optional
+ETW acquisition signal.
 
-1. **Timer mode** (default): each Reveal-After-Start device fires at its
-   configured `DeviceRef.DelaySeconds` — an absolute `T+Xs` measured from the
-   start of the reveal phase. Sub-second precision (it's a `double`). List
-   order is reveal order; if a later device has a smaller time, it's clamped
-   to the previous device's reveal time and fires right after. Default for a
-   new Reveal-After-Start device is 5s.
+1. **Timer mode** (default): per-device `T+Xs` is strict. Each Reveal-After-
+   Start device fires at its configured time, clamped monotonically (if a
+   later device has a smaller time, it fires immediately after the previous).
+   Default for a new Reveal-After-Start device is 5s.
 
 2. **FirstDeviceOpened mode**: kernel ETW (`Microsoft-Windows-Kernel-File`)
    watches for the game's PID opening one of the profile's Always-Visible
-   device files. The signal fires once, then the orchestrator holds for
-   `Profile.PostAcquisitionDelaySeconds` (default 1.5s — see "Slot-commit
-   grace period" below) before starting reveals. Per-device times are
-   ignored in this mode; reveals fire back-to-back, paced only by IOCTL
-   latency.
+   device files, concurrent with the reveal loop. The user's per-device T+Xs
+   are still the primary timing — if the signal never fires (game uses
+   RawInput/WGI/GameInputService and never calls CreateFile on the device
+   file directly), reveals still happen at the configured times.
+   If the signal does fire, the orchestrator short-circuits the current
+   wait, applies `Profile.PostAcquisitionDelaySeconds` (default 1.5s — see
+   "Slot-commit grace period" below) once, then packs all remaining
+   reveals back-to-back paced only by IOCTL latency.
+
+The acquisition signal is an early-fire optimization, not a gate. This means
+acquisition-mode profiles must still have reasonable per-device T+Xs values
+— they act as the safety net upper bound. The UI shows the T+Xs field in
+both modes for this reason.
 
 ETW is EAC-safe: it's one-way kernel telemetry, the consumer never touches
 the source process. Anti-cheats use ETW themselves; it's not a cheat vector.
