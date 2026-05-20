@@ -13,6 +13,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
     private string _exePath               = "";
     private string _exeName               = "";
     private bool   _processWatcherEnabled = true;
+    private AcquisitionTrigger _acquisitionTrigger = AcquisitionTrigger.Timer;
     private bool   _isDirty;
     private bool   _showAllHid;
 
@@ -43,6 +44,29 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         get => _processWatcherEnabled;
         set { Set(ref _processWatcherEnabled, value); IsDirty = true; }
     }
+
+    public AcquisitionTrigger AcquisitionTrigger
+    {
+        get => _acquisitionTrigger;
+        set
+        {
+            if (Set(ref _acquisitionTrigger, value))
+            {
+                IsDirty = true;
+                OnPropertyChanged(nameof(IsTimerMode));
+            }
+        }
+    }
+
+    public bool IsTimerMode => _acquisitionTrigger == AcquisitionTrigger.Timer;
+
+    // For the role dropdown's ItemsSource
+    public static IReadOnlyList<AcquisitionTriggerChoice> AcquisitionTriggers { get; } = [
+        new(AcquisitionTrigger.Timer,             "Fixed time per device"),
+        new(AcquisitionTrigger.FirstDeviceOpened, "When game opens first device"),
+    ];
+
+    public record AcquisitionTriggerChoice(AcquisitionTrigger Mode, string Label);
 
     public bool IsDirty
     {
@@ -218,6 +242,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         _exePath               = p.GameExecutablePath;
         _exeName               = p.GameExecutableName;
         _processWatcherEnabled = p.ProcessWatcherEnabled;
+        _acquisitionTrigger    = p.AcquisitionTrigger;
 
         // Migrate to current schema-2 timing semantics (absolute "reveal at T+Xs").
         //
@@ -287,6 +312,8 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         OnPropertyChanged(nameof(ExePath));
         OnPropertyChanged(nameof(ExeName));
         OnPropertyChanged(nameof(ProcessWatcherEnabled));
+        OnPropertyChanged(nameof(AcquisitionTrigger));
+        OnPropertyChanged(nameof(IsTimerMode));
         OnPropertyChanged(nameof(HasRevealAfterStart));
     }
 
@@ -326,6 +353,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
             GameExecutablePath    = _exePath,
             GameExecutableName    = _exeName,
             ProcessWatcherEnabled = _processWatcherEnabled,
+            AcquisitionTrigger    = _acquisitionTrigger,
             KeepEnabled           = keepEnabled,
             DisableThenRestore    = disableThenRestore,
             KeepDisabled          = keepDisabled,

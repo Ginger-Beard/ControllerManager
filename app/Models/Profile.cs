@@ -50,6 +50,19 @@ public class Profile
     [JsonPropertyName("processWatcherEnabled")]
     public bool ProcessWatcherEnabled { get; set; } = true;
 
+    /// <summary>
+    /// How to time the start of the reveal phase.
+    /// • <see cref="AcquisitionTrigger.Timer"/> (default): wait until the per-device
+    ///   T+Xs configured on each Reveal-After-Start row.
+    /// • <see cref="AcquisitionTrigger.FirstDeviceOpened"/>: subscribe to kernel
+    ///   ETW and start the reveal sequence the moment the game opens its first
+    ///   HID device file. Eliminates per-game timing tuning for games with a hard
+    ///   device-detection window. Falls back to the timer behavior if ETW fails
+    ///   or the signal doesn't arrive within 30 seconds.
+    /// </summary>
+    [JsonPropertyName("acquisitionTrigger")]
+    public AcquisitionTrigger AcquisitionTrigger { get; set; } = AcquisitionTrigger.Timer;
+
     [JsonPropertyName("keepEnabled")]
     public List<DeviceRef> KeepEnabled { get; set; } = [];
 
@@ -83,3 +96,11 @@ public class DeviceRef
 }
 
 public enum TriggerMode { HandleWatcher, Timer }
+
+public enum AcquisitionTrigger
+{
+    /// <summary>Wait the per-device T+Xs times configured in the profile.</summary>
+    Timer,
+    /// <summary>Wait until the game opens its first HID device, then reveal all at once.</summary>
+    FirstDeviceOpened,
+}

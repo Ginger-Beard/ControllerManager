@@ -90,6 +90,18 @@
                           IsChecked="{Binding Editor.ProcessWatcherEnabled}"
                           Margin="0,0,0,4"
                           ToolTip="When on, Controller Manager will detect the game starting and apply this profile automatically. When off, you must launch via the Dashboard, a shortcut, or the Steam wrapper."/>
+
+                <!-- Acquisition trigger: timer vs. detect-first-device-open -->
+                <DockPanel Margin="0,4,0,0"
+                           ToolTip="When to start revealing the Reveal-After-Start devices.&#x0a;&#x0a;• Fixed time per device — wait the T+Xs configured on each row.&#x0a;• When game opens first device — kernel ETW watches for the game's first HID device open and triggers the reveal sequence immediately. Eliminates per-game timing tuning for FFB-sensitive games with a hard detection window. Falls back to the timer if ETW doesn't signal within 30s.">
+                    <TextBlock DockPanel.Dock="Left" Text="Reveal trigger:"
+                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <ComboBox ItemsSource="{x:Static vm:ProfileEditorViewModel.AcquisitionTriggers}"
+                              SelectedValue="{Binding Editor.AcquisitionTrigger}"
+                              SelectedValuePath="Mode"
+                              DisplayMemberPath="Label"
+                              HorizontalAlignment="Left" MinWidth="220"/>
+                </DockPanel>
             </StackPanel>
 
             <Separator Grid.Row="1" Margin="0,0,0,10"/>
@@ -100,8 +112,18 @@
                        FontWeight="SemiBold" Padding="0"/>
                 <TextBlock Foreground="#888" FontStyle="Italic" FontSize="11"
                            VerticalAlignment="Center" Margin="8,0,0,0"
-                           TextTrimming="CharacterEllipsis"
-                           Text="Drag ☰ to reorder. Times are absolute seconds from game launch (decimals OK)."/>
+                           TextTrimming="CharacterEllipsis">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Text" Value="Drag ☰ to reorder. Reveals fire as soon as the game opens its first device — times below are ignored."/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Editor.IsTimerMode}" Value="True">
+                                    <Setter Property="Text" Value="Drag ☰ to reorder. Times are absolute seconds from game launch (decimals OK)."/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
             </DockPanel>
 
             <!-- ── Assignments list (resizable, drag-drop reorderable) ────── -->
@@ -151,14 +173,30 @@
                                                    Margin="0,0,8,0"/>
 
                                         <!-- Reveal time: absolute seconds from game launch. Visible only
-                                             for RevealAfterStart; column reserves width either way. -->
+                                             for RevealAfterStart rows AND only when the profile is in Timer
+                                             mode (in acquisition mode, all reveals fire back-to-back the
+                                             instant the game opens its first device, so per-device times
+                                             would mislead). Column reserves width either way so the role
+                                             dropdown doesn't shift. -->
                                         <StackPanel Grid.Column="2"
                                                     Orientation="Horizontal"
                                                     HorizontalAlignment="Right"
                                                     Margin="0,0,6,0"
-                                                    VerticalAlignment="Center"
-                                                    Visibility="{Binding IsRevealAfterStart,
-                                                        Converter={StaticResource BoolVisConverter}}">
+                                                    VerticalAlignment="Center">
+                                            <StackPanel.Style>
+                                                <Style TargetType="StackPanel">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding IsRevealAfterStart}" Value="True"/>
+                                                                <Condition Binding="{Binding DataContext.Editor.IsTimerMode, RelativeSource={RelativeSource AncestorType=UserControl}}" Value="True"/>
+                                                            </MultiDataTrigger.Conditions>
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </MultiDataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Style>
                                             <TextBlock Text="T+" VerticalAlignment="Center" Margin="0,0,1,0"
                                                        Foreground="#888" FontSize="11"/>
                                             <TextBox Width="40" VerticalContentAlignment="Center"

@@ -90,8 +90,9 @@ public sealed class LaunchOrchestrator : IDisposable
 
     private async Task RunFlow(Profile profile, CancellationToken ct)
     {
-        ActiveProfile = profile;
-        Logger.Write($"[Orchestrator] RunFlow — profile='{profile.Name}' exe='{profile.GameExecutablePath}'");
+        ActiveProfile        = profile;
+        _firstDeviceAcquired = false;
+        Logger.Write($"[Orchestrator] RunFlow — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.AcquisitionTrigger}");
         try
         {
             HideDevices(profile, ct);
@@ -108,6 +109,9 @@ public sealed class LaunchOrchestrator : IDisposable
 
             if (profile.DisableThenRestore.Count > 0)
             {
+                if (profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened)
+                    await WaitForFirstDeviceOpen(gameProc.Id, ct);
+
                 await RevealDisableThenRestore(profile, ct);
                 ct.ThrowIfCancellationRequested();
             }
@@ -230,6 +234,51 @@ public sealed class LaunchOrchestrator : IDisposable
         throw new TimeoutException($"'{procName}.exe' did not start within 60 seconds.");
     }
 
+    // ── Phase 2.5: acquisition signal (optional) ─────────────────────────────────
+
+    private bool _firstDeviceAcquired;
+
+    /// <summary>
+    /// Wait until ETW reports the game's PID opened its first HID device file,
+    /// or 30 seconds, whichever comes first. Sets <see cref="_firstDeviceAcquired"/>
+    /// so RevealDisableThenRestore can pack reveals back-to-back instead of waiting
+    /// for the per-device T+Xs values. On any ETW failure, we fall through with
+    /// _firstDeviceAcquired = false and the reveal phase behaves like Timer mode.
+    /// </summary>
+    private async Task WaitForFirstDeviceOpen(int gamePid, CancellationToken ct)
+    {
+        State = OrchestratorState.RestoringDevices; // status text reads "Revealing devices…" while we wait
+
+        using var watcher = new FirstDeviceAcquisitionWatcher();
+        var tcs = new TaskCompletionSource();
+        watcher.Acquired += () => tcs.TrySetResult();
+
+        if (!watcher.Start(gamePid))
+        {
+            Log("Acquisition trigger: ETW unavailable — falling back to timer.");
+            return;
+        }
+
+        Log("Acquisition trigger: waiting for game to open first device...");
+        // 30s timeout protects against games that don't open any HID device (some
+        // games that get nothing visible at startup may never trigger), or ETW
+        // sessions that silently lose events. Falls through to timer-based reveal.
+        var timeout = Task.Delay(TimeSpan.FromSeconds(30), ct);
+        var winner  = await Task.WhenAny(tcs.Task, timeout);
+
+        if (winner == tcs.Task)
+        {
+            _firstDeviceAcquired = true;
+            Log("Acquisition signal received — revealing remaining devices now.");
+        }
+        else
+        {
+            Log("Acquisition trigger timed out after 30s — falling back to timer.");
+        }
+
+        watcher.Stop();
+    }
+
     // ── Phase 3: reveal devices one by one ───────────────────────────────────────
     //
     // DeviceRef.DelaySeconds is now an ABSOLUTE time from when this phase started
@@ -256,14 +305,25 @@ public sealed class LaunchOrchestrator : IDisposable
         {
             ct.ThrowIfCancellationRequested();
 
-            // Target time = max(device's configured time, time of previous reveal).
-            // All math in milliseconds so devices can be packed within the game's
-            // hot-plug detection window (some games stop accepting new HID arrivals
-            // a few seconds into the session — a sub-second reveal stride avoids
-            // running past that window when there are many devices).
-            var targetAtMs = Math.Max(Math.Max(0, dev.DelaySeconds * 1000.0), lastRevealAtMs);
-            var elapsedMs  = (DateTime.UtcNow - phaseStart).TotalMilliseconds;
-            var waitMs     = targetAtMs - elapsedMs;
+            // In acquisition mode, the per-device T+Xs values are meaningless —
+            // we're already in the game's detection window and need to pack
+            // reveals back-to-back before the window closes. Fire as fast as
+            // IOCTLs allow, in profile list order (which determines slot order).
+            double targetAtMs;
+            if (_firstDeviceAcquired)
+            {
+                targetAtMs = lastRevealAtMs; // no wait beyond IOCTL latency
+            }
+            else
+            {
+                // Target time = max(device's configured time, time of previous reveal).
+                // All math in milliseconds so devices can be packed within the game's
+                // hot-plug detection window.
+                targetAtMs = Math.Max(Math.Max(0, dev.DelaySeconds * 1000.0), lastRevealAtMs);
+            }
+
+            var elapsedMs = (DateTime.UtcNow - phaseStart).TotalMilliseconds;
+            var waitMs    = targetAtMs - elapsedMs;
 
             if (waitMs > 0)
             {
