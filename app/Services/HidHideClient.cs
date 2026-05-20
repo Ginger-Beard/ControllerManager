@@ -78,9 +78,15 @@ public sealed class HidHideClient
 
     private static void BroadcastDeviceChange()
     {
+        // 100ms cap per top-level window. WM_DEVICECHANGE handlers are usually a
+        // re-enumerate call that returns in microseconds; only hung windows hit
+        // the timeout, and SMTO_ABORTIFHUNG already bails on those without
+        // waiting. 1000ms (the old value) was overkill — with many windows open,
+        // a few stuck ones could turn a 5-device reveal into a multi-second
+        // operation, pushing later reveals past the game's hot-plug window.
         try { SendMessageTimeout((IntPtr)HWND_BROADCAST, WM_DEVICECHANGE,
                   (UIntPtr)DBT_DEVNODES_CHANGED, IntPtr.Zero,
-                  SMTO_ABORTIFHUNG, 1000, out _); }
+                  SMTO_ABORTIFHUNG, 100, out _); }
         catch { }
     }
 
