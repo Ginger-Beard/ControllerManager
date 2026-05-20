@@ -8,8 +8,8 @@ using Microsoft.Win32.SafeHandles;
 namespace ControllerManager.Services;
 
 /// <summary>
-/// Watches for the moment a target game process opens one of the
-/// always-visible HID device files configured for the profile.
+/// Watches for the moment a target game process (or its WGI broker) opens one
+/// of the always-visible HID device files configured for the profile.
 ///
 /// EAC-safe: ETW is one-way kernel telemetry — we never touch the game's
 /// process, handles, or memory.
@@ -19,35 +19,51 @@ namespace ControllerManager.Services;
 /// have on <see cref="Models.HidDevice.DeviceInterfacePath"/>. <see cref="Start"/>
 /// translates each Win32 path to its NT path via <c>NtQueryObject</c> at watch
 /// start. Only events whose <c>FileName</c> matches one of those NT paths fire
-/// the <see cref="Acquired"/> signal — failed opens on hidden devices (different
-/// path) and unrelated HID activity (different process) are filtered out.
+/// the <see cref="Acquired"/> signal.
+///
+/// Opener matching: Modern Xbox/UWP titles (Forza Horizon, anything using
+/// Windows.Gaming.Input) don't open HID files directly — they go through the
+/// <c>GameInputService</c> broker. The signal fires for opens from EITHER the
+/// game's PID OR any process whose name matches <see cref="_watchedProcessNames"/>.
+///
+/// All file creates targeting watched paths are also logged verbosely (PID +
+/// process name) so unknown brokers can be discovered post-hoc.
 /// </summary>
 public sealed class FirstDeviceAcquisitionWatcher : IDisposable
 {
     private const string SessionName = "ControllerManager_DeviceAcquisition";
 
-    private TraceEventSession? _session;
-    private Task?              _processTask;
-    private int                _targetPid = -1;
-    private HashSet<string>    _watchedNtPaths = new(StringComparer.OrdinalIgnoreCase);
-    private int                _fired;
+    private TraceEventSession?    _session;
+    private Task?                 _processTask;
+    private int                   _targetPid = -1;
+    private HashSet<string>       _watchedNtPaths       = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string>       _watchedProcessNames  = new(StringComparer.OrdinalIgnoreCase);
+    private int                   _fired;
 
     public event Action? Acquired;
 
     /// <summary>
     /// Subscribe to the kernel file-create stream filtered to the game's PID
-    /// AND the NT paths of the supplied Win32 device interface paths. Returns
-    /// true if ETW + path resolution succeeded; false on any failure (caller
-    /// should fall back to timer-based reveal).
+    /// (or one of the named broker processes) AND the NT paths of the supplied
+    /// Win32 device interface paths. Returns true if ETW + path resolution
+    /// succeeded; false on any failure (caller should fall back to timer-based
+    /// reveal).
     /// </summary>
-    public bool Start(int targetPid, IEnumerable<string> alwaysVisibleDevicePaths)
+    /// <param name="targetPid">The game's PID.</param>
+    /// <param name="alwaysVisibleDevicePaths">Win32 device interface paths to watch.</param>
+    /// <param name="brokerProcessNames">Additional process names (without .exe) whose opens of the watched paths should also fire the signal — e.g. <c>GameInputService</c> for WGI titles.</param>
+    public bool Start(int targetPid,
+                      IEnumerable<string> alwaysVisibleDevicePaths,
+                      IEnumerable<string>? brokerProcessNames = null)
     {
         if (_session != null)
             throw new InvalidOperationException("FirstDeviceAcquisitionWatcher already started");
 
         _targetPid = targetPid;
         _fired     = 0;
-        _watchedNtPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _watchedNtPaths      = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _watchedProcessNames = new HashSet<string>(brokerProcessNames ?? Array.Empty<string>(),
+                                                   StringComparer.OrdinalIgnoreCase);
 
         // Resolve each Win32 device interface path (\\?\HID#xxx#{guid}) to its
         // NT object path (\Device\xxx) so the substring match below is exact.
@@ -80,7 +96,11 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
                 StopOnDispose = true,
             };
 
-            _session.EnableKernelProvider(KernelTraceEventParser.Keywords.FileIOInit);
+            // Enable Process keyword too so data.ProcessName resolves reliably
+            // for broker-name matching and diagnostic logging.
+            _session.EnableKernelProvider(
+                KernelTraceEventParser.Keywords.FileIOInit |
+                KernelTraceEventParser.Keywords.Process);
             _session.Source.Kernel.FileIOCreate += OnFileCreate;
 
             _processTask = Task.Run(() =>
@@ -89,7 +109,11 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
                 catch (Exception ex) { Logger.WriteException("ETW Source.Process", ex); }
             });
 
-            Logger.WriteVerbose($"[Acquisition] Watching PID {targetPid} for {_watchedNtPaths.Count} path(s)");
+            var brokers = _watchedProcessNames.Count == 0
+                ? "(none)"
+                : string.Join(",", _watchedProcessNames);
+            Logger.WriteVerbose(
+                $"[Acquisition] Watching PID {targetPid} (+ brokers: {brokers}) for {_watchedNtPaths.Count} path(s)");
             return true;
         }
         catch (Exception ex)
@@ -102,18 +126,31 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
 
     private void OnFileCreate(FileIOCreateTraceData data)
     {
-        if (_targetPid < 0 || data.ProcessID != _targetPid) return;
         var path = data.FileName;
         if (string.IsNullOrEmpty(path)) return;
 
-        // Exact match against any resolved NT path. ETW occasionally reports
-        // a path with case differences or leading prefix variation — ordinal
-        // case-insensitive equality is the safe default here.
-        if (!_watchedNtPaths.Contains(path)) return;
+        bool pathMatch = _watchedNtPaths.Contains(path);
+
+        // Diagnostic: log every open of a watched path regardless of opener
+        // so we can confirm broker theories (which PID/process is actually
+        // opening the device file). Rare event — set hits are O(1) and the
+        // watched set is small, so spam risk is low.
+        if (pathMatch)
+        {
+            Logger.WriteVerbose(
+                $"[Acquisition] Watched-path open: '{path}' by PID={data.ProcessID} Process='{data.ProcessName}'");
+        }
+
+        bool pidMatch = (_targetPid >= 0 && data.ProcessID == _targetPid)
+                     || (_watchedProcessNames.Count > 0
+                         && _watchedProcessNames.Contains(data.ProcessName));
+
+        if (!pidMatch || !pathMatch) return;
 
         if (Interlocked.Exchange(ref _fired, 1) != 0) return;
 
-        Logger.Write($"[Acquisition] Game opened watched device: {path}");
+        Logger.Write(
+            $"[Acquisition] Signal fired: {path} (PID={data.ProcessID}, Process='{data.ProcessName}')");
         try { Acquired?.Invoke(); } catch (Exception ex) { Logger.WriteException("Acquired handler", ex); }
     }
 

@@ -94,20 +94,75 @@ T+Xs values themselves.
 
 ### FirstDeviceAcquisitionWatcher path matching
 The watcher subscribes to `Microsoft-Windows-Kernel-File` via the TraceEvent
-NuGet, filtered to `KernelTraceEventParser.Keywords.FileIOInit`. ETW reports
-file names in NT object form (`\Device\HID00000XX`), not the Win32 symbolic
-link form on `HidDevice.DeviceInterfacePath` (`\\?\HID#…#{guid}`).
+NuGet, filtered to `KernelTraceEventParser.Keywords.FileIOInit | Process`.
+ETW reports file names in NT object form (`\Device\HID00000XX`), not the
+Win32 symbolic link form on `HidDevice.DeviceInterfacePath`
+(`\\?\HID#…#{guid}`).
 
-`FirstDeviceAcquisitionWatcher.Start(pid, paths)` resolves each Win32 path to
-its NT object name via `NtQueryObject(ObjectNameInformation)` at watch-start
-time, then exact-matches incoming events against that set. Failed opens on
-hidden devices have different paths and are ignored — no NtStatus correlation
-needed. The acquisition event fires exactly once per session (`Interlocked`
-guard on the worker thread).
+`FirstDeviceAcquisitionWatcher.Start(pid, paths, brokerNames)` resolves each
+Win32 path to its NT object name via `NtQueryObject(ObjectNameInformation)`
+at watch-start time, then exact-matches incoming events against that set.
+Failed opens on hidden devices have different paths and are ignored — no
+NtStatus correlation needed. The acquisition event fires exactly once per
+session (`Interlocked` guard on the worker thread).
+
+**Opener matching (PID + broker).** Modern Xbox/UWP titles that use
+Windows.Gaming.Input or the GDK GameInput SDK (Forza Horizon, anything else
+on the GameInput stack) don't call `CreateFile` on HID device files from
+the game's own process — the file open happens in a system broker. A pure
+`data.ProcessID == gamePid` filter misses these entirely (signal never fires
+even though the game gets FFB just fine via the broker's handle).
+
+The watcher accepts a broker process-name set in addition to the game's PID;
+opens of watched paths from either count as the acquisition signal.
+`LaunchOrchestrator` passes the two confirmed brokers:
+- `GameInputService` — original WGI broker built into Windows.
+- `GameInputSvc` — newer GDK GameInput Host Service
+  (`C:\Program Files (x86)\Microsoft GameInput\x64\GameInputSvc.exe`).
+
+ETW `ProcessName` resolution needs the `Process` kernel keyword enabled,
+which the session now does. Compare is `OrdinalIgnoreCase` against the
+process image name without `.exe`.
+
+**Intentionally not in the broker list** (would cause false-positive signals):
+- `Steam` / `gameoverlayui` — Steam Input opens devices at Steam launch
+  (always-on for most users), not at game launch.
+- Companion apps (Razer Synapse, G HUB, SimHub, Pit House) — they open
+  devices for config/telemetry, not on behalf of a game session.
+- `GamingServices` / `GamingServicesNet` — MS Store / Game Pass package
+  management, not input plumbing.
+- `svchost` and other system processes — HID class enumeration generates
+  opens at plug/unplug time that aren't game-relevant.
+
+**Legacy games** (DirectInput, XInput, RawInput — Richard Burns Rally,
+GTR2, rFactor, Live for Speed, anything pre-WGI, plus Unity/Unreal default
+input paths) open HID files directly from the game's own PID. The `gamePid`
+match handles them; no broker entry needed.
+
+**Diagnostic logging.** Every kernel file-create event whose path is in the
+watched set is logged at verbose level with the opening PID + process name —
+regardless of whether that opener matched the PID/broker filter. This makes
+unknown brokers discoverable: if a future game uses some other broker we
+haven't named, the verbose log will show its name on the watched-path open.
 
 ETW session name is `ControllerManager_DeviceAcquisition`; stale sessions
 from prior crashes are stopped at Start. 30s timeout falls back to Timer
 mode if no matching open is observed.
+
+### Forza multi-device flakiness (engine limitation)
+Forza Horizon's engine handles small numbers of HID gaming devices (wheel +
+pedals, or wheel + pedals + 1-2 extras) reliably. Once a profile exposes
+more than that — full sim rig with wheel + pedals + shifter + handbrake +
+button box + paddles all as separate HIDs — the game drops devices,
+misassigns slots, or ignores inputs even when reveal timing is perfect.
+This is a Forza engine constraint, not a CM bug; no amount of clever
+orchestration fixes it.
+
+The README documents the canonical workaround (use SimHub Control Mapper to
+consolidate peripheral inputs onto a single vJoy device; expose only wheel
++ vJoy to Forza). This isn't something CM enforces or detects — but if
+users report "FFB works but other devices aren't recognized" with FH and a
+full rig, the consolidation pattern is the answer.
 
 ### Reveal phase limit
 Works only for hot-plug-aware games (WGI, RawInput, modern XInput). Pure legacy

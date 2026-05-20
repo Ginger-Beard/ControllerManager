@@ -123,6 +123,44 @@ T+Xs is the upper bound, not the target.
 > signal is an early-fire optimization on top of the timer; the timer is the
 > source of truth.
 
+#### Forza + lots of peripherals: consolidate with vJoy
+
+Forza's multi-USB handling is fragile once you start adding peripherals
+beyond the basics. In testing, profiles with a wheel + pedals + shifter +
+handbrake + button box (5+ HID devices) saw the game lose track of devices,
+misassign slots, or ignore inputs entirely — even after Controller Manager
+got the reveal timing right. Forza only reliably handles a handful of
+devices at once; piling on a full sim rig pushes past what the engine wants
+to deal with.
+
+The clean workaround used by experienced sim racers is **input consolidation
+via vJoy + SimHub's Control Mapper**:
+
+1. Install [vJoy](https://github.com/njz3/vJoy/) and bump button count from
+   the default 8 to 32 in vJoy Configurator (you'll need it).
+2. In SimHub, open **Control Mapper** and create mappings from each physical
+   input onto a single vJoy device:
+   - Foot pedals (brake, throttle, clutch) → vJoy axes
+   - Wheel paddles (clutch, up/down shift) → vJoy buttons
+   - Shifter, handbrake, button box → vJoy buttons
+   - **Leave steering on the wheel** — don't route it through vJoy.
+3. In the Controller Manager profile for Forza:
+   - Wheel base → **Always Visible**
+   - vJoy device → **Always Visible**
+   - Every physical pedal set, shifter, handbrake, button box → **Always Hidden**
+4. In Forza's controller settings, bind everything to the consolidated vJoy
+   device (steering and FFB stay on the wheel).
+
+Result: Forza sees exactly **two** devices — the wheel and vJoy. No conflicts,
+no slot confusion, and no dual-source ambiguity (where the same pedal reports
+through both its native wheel axis and a vJoy axis). Steering and FFB stay
+on the wheel where they belong; everything else funnels through vJoy.
+
+This isn't a Controller Manager limitation — it's a Forza engine constraint
+that no amount of clever reveal timing can fix. But CM makes the
+consolidated setup trivial: hide all the raw peripherals, expose only the
+wheel + vJoy, done.
+
 ### ② "I run SimHub / Pit House / G HUB and I don't want to break them"
 
 You don't have to do anything. Controller Manager uses HidHide's *inverse whitelist*

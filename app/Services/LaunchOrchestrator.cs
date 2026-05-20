@@ -312,7 +312,29 @@ public sealed class LaunchOrchestrator : IDisposable
             Logger.Write($"[Acquisition] Signal fired at watcher-start + {elapsedMs}ms");
         };
 
-        if (!watcher.Start(gamePid, watchedPaths))
+        // Modern Xbox/UWP titles open HID files via a system broker rather
+        // than from the game's own process. Two confirmed broker binaries:
+        //   - GameInputService.exe — original WGI broker (built into Windows)
+        //   - GameInputSvc.exe     — newer GDK GameInput Host Service
+        //                            (C:\Program Files (x86)\Microsoft GameInput\x64)
+        // ETW ProcessName strips the .exe suffix; match is case-insensitive.
+        //
+        // Intentionally NOT included (would cause false positives):
+        //   - Steam.exe / gameoverlayui.exe — Steam Input opens devices at
+        //     Steam launch (i.e. always-on), not at game launch. Signal would
+        //     fire instantly on profile start.
+        //   - Companion apps (Razer Synapse, G HUB, SimHub, etc.) — they
+        //     open devices for config/telemetry, not on-behalf-of a game.
+        //   - GamingServices(Net).exe — MS Store package management, not input.
+        //   - svchost.exe / system processes — HID class enumeration noise.
+        //
+        // Legacy DirectInput / XInput / RawInput games (Richard Burns Rally,
+        // GTR2, rFactor, Live for Speed, anything pre-WGI) open HID files
+        // directly from the game's own PID — handled by the gamePid match,
+        // no broker needed.
+        var brokerProcessNames = new[] { "GameInputService", "GameInputSvc" };
+
+        if (!watcher.Start(gamePid, watchedPaths, brokerProcessNames))
         {
             Log("Acquisition: ETW unavailable — per-device T+Xs values control timing.");
             watcher.Dispose();
