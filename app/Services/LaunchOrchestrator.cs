@@ -315,42 +315,44 @@ public sealed class LaunchOrchestrator : IDisposable
         }
 
         var watcher = new FirstDeviceAcquisitionWatcher();
-        watcher.Acquired += () => _firstDeviceAcquired = true;
-
-        // Modern Xbox/UWP titles open HID files via a system broker rather
-        // than from the game's own process. Two confirmed broker binaries:
-        //   - GameInputService.exe — original WGI broker (built into Windows)
-        //   - GameInputSvc.exe     — newer GDK GameInput Host Service
-        //                            (C:\Program Files (x86)\Microsoft GameInput\x64)
-        // ETW ProcessName strips the .exe suffix; match is case-insensitive.
-        //
-        // Intentionally NOT included (would cause false positives):
-        //   - Steam.exe / gameoverlayui.exe — Steam Input opens devices at
-        //     Steam launch (i.e. always-on), not at game launch. Signal would
-        //     fire instantly on profile start.
-        //   - Companion apps (Razer Synapse, G HUB, SimHub, etc.) — they
-        //     open devices for config/telemetry, not on-behalf-of a game.
-        //   - GamingServices(Net).exe — MS Store package management, not input.
-        //   - svchost.exe / system processes — HID class enumeration noise.
-        //
-        // Legacy DirectInput / XInput / RawInput games (Richard Burns Rally,
-        // GTR2, rFactor, Live for Speed, anything pre-WGI) open HID files
-        // directly from the game's own PID — handled by the gamePid match,
-        // no broker needed.
-        var brokerProcessNames = new[] { "GameInputService", "GameInputSvc" };
-
-        bool started;
-        try { started = watcher.Start(gamePid, triggerDevices, diagnosticDevices, brokerProcessNames); }
-        catch { watcher.Dispose(); throw; }
-        if (!started)
+        bool started = false;
+        try
         {
-            Log("Acquisition: ETW unavailable — per-device T+Xs values control timing.");
-            watcher.Dispose();
-            return null;
-        }
+            watcher.Acquired += () => _firstDeviceAcquired = true;
 
-        Log("Acquisition watcher started. Per-device T+Xs serve as safety net if ETW doesn't fire.");
-        return watcher;
+            // Modern Xbox/UWP titles open HID files via a system broker rather
+            // than from the game's own process. Two confirmed broker binaries:
+            //   - GameInputService.exe — original WGI broker (built into Windows)
+            //   - GameInputSvc.exe     — newer GDK GameInput Host Service
+            //                            (C:\Program Files (x86)\Microsoft GameInput\x64)
+            // ETW ProcessName strips the .exe suffix; match is case-insensitive.
+            //
+            // Intentionally NOT included (would cause false positives):
+            //   - Steam.exe / gameoverlayui.exe — Steam Input opens devices at
+            //     Steam launch (i.e. always-on), not at game launch. Signal would
+            //     fire instantly on profile start.
+            //   - Companion apps (Razer Synapse, G HUB, SimHub, etc.) — they
+            //     open devices for config/telemetry, not on-behalf-of a game.
+            //   - GamingServices(Net).exe — MS Store package management, not input.
+            //   - svchost.exe / system processes — HID class enumeration noise.
+            //
+            // Legacy DirectInput / XInput / RawInput games (Richard Burns Rally,
+            // GTR2, rFactor, Live for Speed, anything pre-WGI) open HID files
+            // directly from the game's own PID — handled by the gamePid match,
+            // no broker needed.
+            var brokerProcessNames = new[] { "GameInputService", "GameInputSvc" };
+
+            started = watcher.Start(gamePid, triggerDevices, diagnosticDevices, brokerProcessNames);
+            if (!started)
+                Log("Acquisition: ETW unavailable — per-device T+Xs values control timing.");
+            else
+                Log("Acquisition watcher started. Per-device T+Xs serve as safety net if ETW doesn't fire.");
+        }
+        finally
+        {
+            if (!started) watcher.Dispose();
+        }
+        return started ? watcher : null;
     }
 
     /// <summary>
@@ -377,27 +379,29 @@ public sealed class LaunchOrchestrator : IDisposable
         }
 
         var watcher = new FirstDeviceAcquisitionWatcher();
-        var brokerProcessNames = new[] { "GameInputService", "GameInputSvc" };
-
-        // All devices passed as triggers so the first-open log line includes
-        // a "[Acquisition] Signal fired by ..." too — handy "winner" marker
-        // even though no reveal loop is listening.
-        //
-        // logAllHidOpens=true: also log any HID-looking path the kernel reports
-        // even when it doesn't match a resolved watched path — this is how we
-        // discover path-format mismatches and broker pre-opens.
-        bool started;
-        try { started = watcher.Start(gamePid, devices, null, brokerProcessNames, logAllHidOpens: true); }
-        catch { watcher.Dispose(); throw; }
-        if (!started)
+        bool started = false;
+        try
         {
-            Log("Diagnostic watcher: ETW unavailable.");
-            watcher.Dispose();
-            return null;
-        }
+            var brokerProcessNames = new[] { "GameInputService", "GameInputSvc" };
 
-        Log($"Diagnostic watcher: observing {devices.Count} HID device(s) (verbose logging only — no slot-fix effect).");
-        return watcher;
+            // All devices passed as triggers so the first-open log line includes
+            // a "[Acquisition] Signal fired by ..." too — handy "winner" marker
+            // even though no reveal loop is listening.
+            //
+            // logAllHidOpens=true: also log any HID-looking path the kernel reports
+            // even when it doesn't match a resolved watched path — this is how we
+            // discover path-format mismatches and broker pre-opens.
+            started = watcher.Start(gamePid, devices, null, brokerProcessNames, logAllHidOpens: true);
+            if (!started)
+                Log("Diagnostic watcher: ETW unavailable.");
+            else
+                Log($"Diagnostic watcher: observing {devices.Count} HID device(s) (verbose logging only — no slot-fix effect).");
+        }
+        finally
+        {
+            if (!started) watcher.Dispose();
+        }
+        return started ? watcher : null;
     }
 
     // ── Phase 3: reveal devices one by one ───────────────────────────────────────

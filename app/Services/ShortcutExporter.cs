@@ -25,27 +25,32 @@ public static class ShortcutExporter
         var schtasks = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.System), "schtasks.exe");
 
-        // Use WScript.Shell COM object — no interop assembly needed
+        // Use WScript.Shell COM object via reflection — no interop assembly needed.
         var shellType = Type.GetTypeFromProgID("WScript.Shell")
                      ?? throw new InvalidOperationException("WScript.Shell COM not available.");
-        dynamic shell    = Activator.CreateInstance(shellType)!;
-        dynamic shortcut = shell.CreateShortcut(lnkPath); // lgtm[cs/invalid-dynamic-call] — intentional WScript.Shell COM late-binding
+        var shell    = Activator.CreateInstance(shellType)!;
+        var shortcut = shellType.InvokeMember("CreateShortcut",
+            System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { lnkPath })!;
+        var st = shortcut.GetType();
 
-        shortcut.TargetPath       = schtasks;
-        shortcut.Arguments        = $"/Run /TN \"{LaunchTaskManager.TaskName(profileId)}\"";
-        shortcut.WorkingDirectory = Path.GetDirectoryName(appExe) ?? "";
-        shortcut.Description      = "Launch game via Controller Manager";
+        void Set(string prop, object val) =>
+            st.InvokeMember(prop, System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { val });
+
+        Set("TargetPath",       schtasks);
+        Set("Arguments",        $"/Run /TN \"{LaunchTaskManager.TaskName(profileId)}\"");
+        Set("WorkingDirectory", Path.GetDirectoryName(appExe) ?? "");
+        Set("Description",      "Launch game via Controller Manager");
 
         // Prefer the game's own icon; fall back to the app exe icon.
         // Icon is independent of TargetPath, so the schtasks indirection is invisible.
         var iconSource = File.Exists(gameExePath) ? gameExePath : appExe;
-        shortcut.IconLocation = $"{iconSource},0";
+        Set("IconLocation", $"{iconSource},0");
 
         // Hide the schtasks console window when the shortcut runs.
         // WindowStyle 7 = "Minimized, no focus."
-        shortcut.WindowStyle = 7;
+        Set("WindowStyle", 7);
 
-        shortcut.Save();
+        st.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, shortcut, null);
     }
 
     public static string DesktopPath(string profileName) =>

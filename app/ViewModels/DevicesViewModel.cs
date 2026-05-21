@@ -231,36 +231,42 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
         if (string.IsNullOrEmpty(path)) return;
 
         var monitor = new HidInputMonitor();
-        bool opened;
-        try { opened = monitor.Open(path); }
-        catch { monitor.Dispose(); throw; }
-        if (!opened) { monitor.Dispose(); return; }
+        bool success = false;
+        try
+        {
+            if (!monitor.Open(path)) return;
 
-        Axes.Clear();
-        Buttons.Clear();
-        Sticks.Clear();
-        _stickAxisIndexes.Clear();
+            Axes.Clear();
+            Buttons.Clear();
+            Sticks.Clear();
+            _stickAxisIndexes.Clear();
 
-        foreach (var ax in monitor.Axes) Axes.Add(new AxisViewModel(ax.Name));
-        for (int i = 1; i <= monitor.TotalButtonCount; i++)
-            Buttons.Add(new ButtonViewModel(i.ToString()));
+            foreach (var ax in monitor.Axes) Axes.Add(new AxisViewModel(ax.Name));
+            for (int i = 1; i <= monitor.TotalButtonCount; i++)
+                Buttons.Add(new ButtonViewModel(i.ToString()));
 
-        // Detect 2D stick pairs from the axis list.
-        //   X (0x30) + Y (0x31)  → "Left Stick"
-        //   Rx (0x33) + Ry (0x34) → "Right Stick"
-        //   Z (0x32) + Rz (0x35)  → "Z/Rz" (often triggers, sometimes a stick;
-        //                                   we label generically so the user can tell)
-        // Generic Desktop usage page only — vendor-defined axes don't get a pad.
-        AddPairIfPresent(monitor, 0x30, 0x31, "Left Stick");
-        AddPairIfPresent(monitor, 0x33, 0x34, "Right Stick");
-        AddPairIfPresent(monitor, 0x32, 0x35, "Z / Rz");
+            // Detect 2D stick pairs from the axis list.
+            //   X (0x30) + Y (0x31)  → "Left Stick"
+            //   Rx (0x33) + Ry (0x34) → "Right Stick"
+            //   Z (0x32) + Rz (0x35)  → "Z/Rz" (often triggers, sometimes a stick;
+            //                                   we label generically so the user can tell)
+            // Generic Desktop usage page only — vendor-defined axes don't get a pad.
+            AddPairIfPresent(monitor, 0x30, 0x31, "Left Stick");
+            AddPairIfPresent(monitor, 0x33, 0x34, "Right Stick");
+            AddPairIfPresent(monitor, 0x32, 0x35, "Z / Rz");
 
-        monitor.AxesUpdated    += OnAxesUpdated;
-        monitor.ButtonsUpdated += OnButtonsUpdated;
+            monitor.AxesUpdated    += OnAxesUpdated;
+            monitor.ButtonsUpdated += OnButtonsUpdated;
 
-        _monitor = monitor;
-        _monitor.StartPolling(action =>
-            Application.Current?.Dispatcher.BeginInvoke(action));
+            _monitor = monitor;
+            _monitor.StartPolling(action =>
+                Application.Current?.Dispatcher.BeginInvoke(action));
+            success = true;
+        }
+        finally
+        {
+            if (!success) monitor.Dispose();
+        }
     }
 
     private void AddPairIfPresent(HidInputMonitor monitor, ushort xUsage, ushort yUsage, string label)
