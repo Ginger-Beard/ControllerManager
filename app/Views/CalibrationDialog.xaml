@@ -1,0 +1,81 @@
+<Window x:Class="ControllerManager.Views.CalibrationDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Timing test"
+        Width="720" Height="520"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        ResizeMode="CanResize">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ── Header / instructions ─────────────────────────────────── -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+            <TextBlock x:Name="HeadlineText"
+                       FontSize="16" FontWeight="SemiBold"
+                       Text="Measuring device activity..."
+                       Margin="0,0,0,6"/>
+            <TextBlock x:Name="BodyText"
+                       TextWrapping="Wrap"
+                       Foreground="#555"
+                       Text="1. Make sure all your devices are plugged in. (No need to change Controller Manager's profile.)&#x0a;2. Launch your game and let it scan controllers.&#x0a;3. Play for 15–30 seconds — drive a bit, push the wheel, press a few buttons.&#x0a;4. Click 'Stop and show results' below.&#x0a;&#x0a;Controller Manager will compare a 'before' and 'after' snapshot of which devices the system is actively reading. The devices with the biggest jump are the ones your game was using."/>
+        </StackPanel>
+
+        <!-- ── Results panel (hidden until stop) ─────────────────────── -->
+        <Border Grid.Row="1" BorderBrush="#CCC" BorderThickness="1">
+            <Grid>
+                <TextBlock x:Name="WaitingText"
+                           Text="Waiting — the baseline snapshot is captured. Click Stop when you've finished playing."
+                           Margin="12" Foreground="#888" FontStyle="Italic"
+                           VerticalAlignment="Top"/>
+
+                <DataGrid x:Name="ResultsGrid"
+                          Visibility="Collapsed"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          HeadersVisibility="Column"
+                          GridLinesVisibility="Horizontal"
+                          AlternatingRowBackground="#F8F8F8"
+                          CanUserAddRows="False"
+                          SelectionMode="Single">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Device" Binding="{Binding DeviceDescription}" Width="*"/>
+                        <DataGridTextColumn Header="VID:PID" Binding="{Binding VidPidDisplay}" Width="100"/>
+                        <DataGridTextColumn Header="Reads during test" Binding="{Binding ReadsDelta}" Width="140">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="HorizontalAlignment" Value="Right"/>
+                                    <Setter Property="Margin" Value="0,0,8,0"/>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                        <DataGridTextColumn Header="Last read" Binding="{Binding LastReadDisplay}" Width="120"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Border>
+
+        <!-- ── Footer buttons ────────────────────────────────────────── -->
+        <DockPanel Grid.Row="2" Margin="0,12,0,0">
+            <Button x:Name="CloseButton"
+                    DockPanel.Dock="Right"
+                    Content="Close"
+                    Padding="14,4"
+                    Visibility="Collapsed"
+                    Click="CloseButton_Click"/>
+            <Button x:Name="StopButton"
+                    DockPanel.Dock="Right"
+                    Content="Stop and show results"
+                    Padding="14,4"
+                    Click="StopButton_Click"/>
+            <TextBlock x:Name="StatusText"
+                       VerticalAlignment="Center"
+                       Foreground="#888"
+                       Text=""/>
+        </DockPanel>
+    </Grid>
+</Window>

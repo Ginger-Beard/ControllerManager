@@ -122,6 +122,14 @@ public sealed class LaunchOrchestrator : IDisposable
             {
                 watcher = StartAcquisitionWatcher(profile, gameProc.Id);
             }
+            else if (Logger.CurrentLevel == LogLevel.Verbose)
+            {
+                // Pure observation: when verbose logging is on, attach the
+                // watcher to every HID device so the user can see exactly when
+                // the game opens each one. Useful for the auto-detect-timing
+                // calibration use case (see DEVELOPMENT.md → Phase 0).
+                watcher = StartDiagnosticWatcher(gameProc.Id);
+            }
 
             if (profile.DisableThenRestore.Count > 0)
             {
@@ -349,6 +357,50 @@ public sealed class LaunchOrchestrator : IDisposable
         }
 
         Log("Acquisition watcher started. Per-device T+Xs serve as safety net if ETW doesn't fire.");
+        return watcher;
+    }
+
+    /// <summary>
+    /// Verbose-mode observation watcher — runs only when Logger.CurrentLevel is
+    /// Verbose AND no acquisition signal is needed for slot ordering. Watches
+    /// every HID device on the system; logs every open with friendly name +
+    /// PID + opener process + elapsed timestamp. The signal fires when the
+    /// first watched device is opened but nothing listens for it.
+    /// </summary>
+    private FirstDeviceAcquisitionWatcher? StartDiagnosticWatcher(int gamePid)
+    {
+        var allDevices = _enumerator.GetAll(showAllHid: true);
+        var devices    = new List<FirstDeviceAcquisitionWatcher.DeviceToWatch>();
+        foreach (var d in allDevices)
+        {
+            if (string.IsNullOrEmpty(d.DeviceInterfacePath)) continue;
+            devices.Add(new(d.DeviceInterfacePath, d.FriendlyName));
+        }
+
+        if (devices.Count == 0)
+        {
+            Log("Diagnostic watcher: no HID devices to observe.");
+            return null;
+        }
+
+        var watcher = new FirstDeviceAcquisitionWatcher();
+        var brokerProcessNames = new[] { "GameInputService", "GameInputSvc" };
+
+        // All devices passed as triggers so the first-open log line includes
+        // a "[Acquisition] Signal fired by ..." too — handy "winner" marker
+        // even though no reveal loop is listening.
+        //
+        // logAllHidOpens=true: also log any HID-looking path the kernel reports
+        // even when it doesn't match a resolved watched path — this is how we
+        // discover path-format mismatches and broker pre-opens.
+        if (!watcher.Start(gamePid, devices, null, brokerProcessNames, logAllHidOpens: true))
+        {
+            Log("Diagnostic watcher: ETW unavailable.");
+            watcher.Dispose();
+            return null;
+        }
+
+        Log($"Diagnostic watcher: observing {devices.Count} HID device(s) (verbose logging only — no slot-fix effect).");
         return watcher;
     }
 

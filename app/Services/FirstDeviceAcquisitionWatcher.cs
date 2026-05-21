@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using ControllerManager.Native;
+using Microsoft.Diagnostics.Tracing;
 using Microsoft.Diagnostics.Tracing.Parsers;
 using Microsoft.Diagnostics.Tracing.Parsers.Kernel;
 using Microsoft.Diagnostics.Tracing.Session;
@@ -33,6 +35,12 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
 {
     private const string SessionName = "ControllerManager_DeviceAcquisition";
 
+    // Microsoft-Windows-Input-HIDCLASS — fires events for HID IOCTL flow,
+    // which is what happens against already-open handles (game ↔ broker IPC).
+    // FileIOCreate misses these entirely because no new CreateFile is involved.
+    private static readonly Guid HidClassProviderGuid =
+        new("6465da78-e7a0-4f39-b084-8f53c7c30dc6");
+
     public readonly record struct DeviceToWatch(string Win32Path, string FriendlyName);
 
     private TraceEventSession?    _session;
@@ -45,6 +53,10 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
     private HashSet<string>       _watchedProcessNames  = new(StringComparer.OrdinalIgnoreCase);
     private System.Diagnostics.Stopwatch _sessionClock  = new();
     private int                   _fired;
+    // When true, log every kernel file-create whose path looks HID-related —
+    // even if it doesn't match the resolved watched paths. Used in diagnostic
+    // mode to discover path-format mismatches and broker-only opens.
+    private bool                  _logAllHidOpens;
 
     public event Action? Acquired;
 
@@ -66,10 +78,12 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
     /// <param name="triggerDevices">Always Visible devices — their opens fire the signal.</param>
     /// <param name="diagnosticDevices">Reveal-After-Start devices — opens logged only.</param>
     /// <param name="brokerProcessNames">Additional process names (without .exe) whose opens of the trigger paths should also fire the signal — e.g. <c>GameInputService</c> for WGI titles.</param>
+    /// <param name="logAllHidOpens">Diagnostic mode: log every kernel file-create on any HID-looking path, regardless of whether it matches the resolved watched set. Use when investigating path-format issues or broker pre-open scenarios.</param>
     public bool Start(int targetPid,
                       IEnumerable<DeviceToWatch> triggerDevices,
                       IEnumerable<DeviceToWatch>? diagnosticDevices = null,
-                      IEnumerable<string>? brokerProcessNames = null)
+                      IEnumerable<string>? brokerProcessNames = null,
+                      bool logAllHidOpens = false)
     {
         if (_session != null)
             throw new InvalidOperationException("FirstDeviceAcquisitionWatcher already started");
@@ -80,6 +94,7 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
         _triggerPaths        = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         _watchedProcessNames = new HashSet<string>(brokerProcessNames ?? Array.Empty<string>(),
                                                    StringComparer.OrdinalIgnoreCase);
+        _logAllHidOpens      = logAllHidOpens;
 
         // Resolve each Win32 device interface path (\\?\HID#xxx#{guid}) to its
         // NT object path (\Device\xxx) so the substring match below is exact.
@@ -128,6 +143,17 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
                 KernelTraceEventParser.Keywords.Process);
             _session.Source.Kernel.FileIOCreate += OnFileCreate;
 
+            // Diagnostic: also subscribe to the user-mode HIDCLASS provider.
+            // This catches the IOCTL flow we care about for WGI titles (game ↔
+            // GameInputSvc IPC ends up here as HID class IOCTLs against the
+            // broker's already-open handles).
+            if (_logAllHidOpens)
+            {
+                _session.EnableProvider(HidClassProviderGuid, TraceEventLevel.Verbose);
+                var dyn = new DynamicTraceEventParser(_session.Source);
+                dyn.All += OnHidClassEvent;
+            }
+
             _processTask = Task.Run(() =>
             {
                 try { _session.Source.Process(); }
@@ -154,7 +180,19 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
         var path = data.FileName;
         if (string.IsNullOrEmpty(path)) return;
 
-        if (!_pathToName.TryGetValue(path, out var friendly)) return;
+        if (!_pathToName.TryGetValue(path, out var friendly))
+        {
+            // In diagnostic mode, log any HID-looking path the kernel reports
+            // so we can spot path-format mismatches between NtQueryObject's
+            // view and the ETW kernel-file event view.
+            if (_logAllHidOpens && LooksLikeHidPath(path))
+            {
+                var elapsed = _sessionClock.Elapsed.TotalSeconds;
+                Logger.WriteVerbose(
+                    $"[Acquisition] +{elapsed:0.000}s UNMATCHED HID open: '{path}' by PID={data.ProcessID} Process='{data.ProcessName}'");
+            }
+            return;
+        }
 
         var elapsedSec = _sessionClock.Elapsed.TotalSeconds;
         bool isTrigger = _triggerPaths.Contains(path);
@@ -196,6 +234,46 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
     }
 
     public void Dispose() => Stop();
+
+    // Diagnostic handler for Microsoft-Windows-Input-HIDCLASS events. The
+    // provider is undocumented externally — we don't know the event schema
+    // ahead of time — so dump every accessible payload field by name.
+    private void OnHidClassEvent(TraceEvent data)
+    {
+        if (data.ProviderGuid != HidClassProviderGuid) return;
+
+        var elapsed = _sessionClock.Elapsed.TotalSeconds;
+        var sb = new StringBuilder(256);
+        sb.Append($"[HIDCLASS] +{elapsed:0.000}s ");
+        sb.Append($"Event='{data.EventName}' ID={(int)data.ID} Opcode={data.Opcode} ");
+        sb.Append($"PID={data.ProcessID} Process='{data.ProcessName}'");
+
+        var names = data.PayloadNames;
+        if (names != null)
+        {
+            for (int i = 0; i < names.Length; i++)
+            {
+                try
+                {
+                    var val = data.PayloadValue(i);
+                    sb.Append(' ').Append(names[i]).Append('=').Append(val);
+                }
+                catch { /* unparseable payload field — skip */ }
+            }
+        }
+
+        Logger.WriteVerbose(sb.ToString());
+    }
+
+    // ETW reports HID device opens in a few NT path forms. The exact form
+    // depends on which driver layer is being opened (raw HID, HID class, USB
+    // HID minidriver, etc.). Match on common substrings so we catch any of
+    // them in diagnostic mode.
+    private static bool LooksLikeHidPath(string path) =>
+        path.Contains(@"\Device\HID",          StringComparison.OrdinalIgnoreCase) ||
+        path.Contains(@"\Device\HumanInterface", StringComparison.OrdinalIgnoreCase) ||
+        path.Contains(@"\Device\KMDF",         StringComparison.OrdinalIgnoreCase) ||
+        path.Contains(@"\Device\Usb",          StringComparison.OrdinalIgnoreCase);
 
     // ── NT path resolution ──────────────────────────────────────────────────────
 

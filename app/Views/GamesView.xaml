@@ -88,6 +88,7 @@
                 <!-- Auto-trigger toggle (per-profile) -->
                 <CheckBox Content="Auto-trigger this profile when the game launches"
                           IsChecked="{Binding Editor.ProcessWatcherEnabled}"
+                          Click="AutoTrigger_Click"
                           Margin="0,0,0,4"
                           ToolTip="When on, Controller Manager will detect the game starting and apply this profile automatically. When off, you must launch via the Dashboard, a shortcut, or the Steam wrapper."/>
 
@@ -353,6 +354,14 @@
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="🎮" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
                             <TextBlock Text="Copy Steam Command" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Click="RunTimingTest_Click"
+                            Padding="8,4" Margin="12,0,0,0"
+                            ToolTip="Run a timing test: launch your game with everything visible, play for 15-30s, and Controller Manager will measure which devices the game actually uses. Helps figure out reveal order and timing.">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="⏱" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Run timing test" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
                 </StackPanel>

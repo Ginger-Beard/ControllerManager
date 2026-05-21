@@ -379,64 +379,83 @@ forwards:
 
 ## Open work
 
-### Auto-detect timing (Calibration Mode)
+### Auto-detect timing (Calibration Mode) — built, may need iteration
 
-**Concept.** Most users have no idea what to put in their per-device "Reveal at"
-times. They guess, fail, re-guess. We can do better by measuring the game's
-actual device-open order on a calibration run and using that to drive profile
-configuration.
+**Status**: Shipped. `CalibrationRunner` + `CalibrationDialog` use HIDCLASS
+Rundown snapshot diffing to measure per-device activity during a user session.
+Open question is now empirical: does the diff cleanly separate "game-used"
+devices from "broker keeps the handle warm" noise across enough games to be
+useful? Need real-world testing.
 
-**Phase 0 — Just observe first.** Before designing the feature, run the
-existing diagnostic logging (shipped in the current watcher) across a few
-real sessions and a few games to understand what we're actually working with:
+#### How it works
 
-- Is open order stable run-to-run on the same machine?
-- How much does cold boot vs warm cache shift things?
-- Do different games (Forza vs ACC vs iRacing vs RBR) have wildly different
-  patterns, or is there a common shape?
-- How does GameInputService broker attribution affect what we see for
-  WGI titles?
-- Is there a clear "slot assignment" signal we can identify from the open
-  sequence, or is it more diffuse than that?
+The original plan was to observe kernel `FileIOCreate` events during the
+session — log when the game (or its broker) opened each HID device. That
+approach **does not work** for modern Xbox/UWP titles (Forza, anything on
+WGI). Empirical finding: `GameInputSvc` opens the device files at *its*
+startup (boot time), then the game communicates with it via IPC. No
+`CreateFile` fires during the game session — the kernel sees zero file-open
+events on HID paths.
 
-**Open question:** still not fully understood why games pick the in-game
-device order they do. Is it the order Windows enumerates HIDs to the game's
-DirectInput/WGI call? Is it the order the game internally opens them? Does
-it correlate with the file-open order ETW sees, or is there a separate
-slot-assignment step? Worth answering before building a "we know better than
-the user" auto-apply feature on top.
+The replacement mechanism uses the user-mode
+`Microsoft-Windows-Input-HIDCLASS` ETW provider (GUID
+`{6465da78-e7a0-4f39-b084-8f53c7c30dc6}`). At verbose level it emits a
+**Rundown** burst when freshly enabled — one event per HID device on the
+system. Each event includes:
 
-**Phase 1 — One-shot calibration (the actual feature).** Once we have data:
+- `DeviceInstancePath` — canonical Win32 device-instance path.
+- `DeviceDescription` — human-ish name.
+- `VendorID` / `ProductID` / `VersionNumber`.
+- `OpenCount` — current number of open handles.
+- `NumReadReports` — **lifetime** read counter.
+- `LastReadReportSuccessTime` — FILETIME of last successful read.
+  (Sentinel value `864000000000` = 1 day in ticks = "never read.")
 
-1. New button on the Games tab: **"Run timing test"**.
-2. Orchestrator launches the game with **no hiding active** (full device
-   visibility — we lose the FFB-slot-fix for this session, but that's the
-   point: we're measuring, not playing).
-3. Watcher operates in **record-all mode**: monitor every device's NT path,
-   log a timestamped record of every kernel file-create with PID + ProcessName.
-4. User plays for 5–10s and exits. CM presents the timeline:
-   ```
-   0.00s   forza_horizon_6.exe spawned
-   4.21s   MOZA R9 Wheel opened by GameInputService
-   4.23s   Heusinkveld Pedals opened by GameInputService
-   4.24s   Sequential Shifter opened by GameInputService
-   4.26s   Handbrake opened by GameInputService
-   ```
-5. **"Apply these to my profile"** button — populates the device list with
-   the **literal observed order and times** (no automatic safety margin —
-   that just hides the data from the user). First device → Always Visible;
-   rest → Reveal After Start at the observed times. User can then drag rows
-   to reorder, bump times manually if they want a margin, or accept as-is.
+By capturing a baseline rundown before the user plays, a final rundown after
+they exit, and diffing `NumReadReports` per device, we identify which
+devices the system actively read during the interval. The biggest mover is
+typically the game's slot #1.
 
-This works because the user can SEE the measurement and decide for themselves
-whether to pad it. A 2s margin baked in silently is paternalistic when the
-actual numbers are right there.
+This is fundamentally **a polling-snapshot mechanism, not an event stream**.
+Re-enabling the provider triggers a new rundown burst; rundown completion is
+signalled by `Rundown/Stop` (EventID 2). One snapshot ≈ 10ms in practice.
 
-**Phase 2 — Continuous monitoring (weak maybe, possibly excessive).**
-Diagnostic logging already records open timing on watched paths during normal
-sessions. *In theory* we could persist those records per-profile across runs
-and use them to detect drift — surface a toast if the latest run's signal
-time deviates from rolling history.
+#### Code layout
+
+- `Services/CalibrationRunner.cs` — `RunAsync(CancellationToken)`:
+  baseline → wait for cancel → final → diff. Internal `Snapshot` record
+  per device. Returns `Result(baselineAt, finalAt, devices)` sorted
+  descending by `ReadsDelta`.
+- `Views/CalibrationDialog.xaml(.cs)` — modal window with:
+  - Instructions ("launch your game, play 15-30s, click Stop").
+  - "Stop and show results" button → cancels runner, captures final, displays
+    table.
+  - Result table: Device | VID:PID | Reads during test | Last read.
+- `Views/GamesView.xaml` — "⏱ Run timing test" button in the actions row;
+  click handler in `GamesView.xaml.cs::RunTimingTest_Click` opens the dialog.
+
+#### Known limitations
+
+- **Broker noise.** `GameInputSvc` may be reading from many devices it has
+  handles open for, not just the one the game asked about. So `ReadsDelta`
+  may go up for several devices — distinguishing "actively used by game" vs
+  "broker keeping warm" needs empirical study. The user reads the table and
+  decides; we don't auto-apply.
+- **No persistence yet.** Each calibration is one-shot. No history, no
+  "compare to previous run." Easy to add when Phase 2 (below) gets built.
+- **No "apply to profile" button yet.** User reads the table, manually
+  edits their profile. Phase 1.5 work — straightforward to wire once we
+  trust the data.
+- **Diagnostic watcher in `LaunchOrchestrator` still runs** when verbose
+  logging is enabled (separate from calibration). It captures one HIDCLASS
+  rundown at game-launch time and logs FileIOCreate events — overlaps with
+  calibration but useful for general debugging. Could be deduplicated later.
+
+#### Phase 2 — Continuous monitoring (weak maybe, possibly excessive)
+
+In theory we could persist calibration snapshots per-profile across runs and
+use them to detect drift — surface a toast if the latest run's signal time
+deviates from rolling history.
 
 Why this is probably overkill: once a user has reasonable times from
 Phase 1, they're unlikely to need automatic re-tuning. Cold-boot vs warm
@@ -445,23 +464,6 @@ sub-second drift doesn't actually break anything. The toast prompts would
 mostly be noise. Revisit only if real user reports show drift is a problem.
 The math (mean + 2σ, EWMA, etc.) is a sub-problem of Phase 2 that we don't
 need to solve unless we ever build it.
-
-**Edge cases / caveats** (mostly Phase 1):
-- **Calibration run has no FFB.** UI must be honest about this so users don't
-  treat the test as a normal session.
-- **WGI brokers.** Opens are attributed to `GameInputService`, not the game
-  PID. Already handled in the watcher; calibration UI should display the
-  honest opener (`"opened by GameInputService on behalf of forza.exe"`).
-- **Anti-cheat.** Calibration is pure ETW (no process touch). EAC-safe.
-
-**Implementation hook (already in place):** The watcher's new
-`Start(triggerDevices, diagnosticDevices)` API already records timestamped
-opens. For Phase 0, just have the user enable verbose logging and run real
-sessions — we have the data we need without writing more code.
-
-**Why this is high-value (Phase 1)**: it converts the most fragile, error-prone
-part of setup ("pick numbers that work") into "measure once and click apply."
-Lower support load, better outcomes for non-technical users.
 
 ### Steam launch UAC (deferred — process watcher covers 99% of cases)
 

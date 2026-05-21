@@ -216,6 +216,43 @@ public partial class GamesView : UserControl
     private ProfileEditorViewModel? ResolveEditor() =>
         (DataContext as GamesViewModel)?.Editor;
 
+    // Prevent enabling auto-trigger if another profile already auto-triggers
+    // on the same exe. Two profiles racing on a single game would have the
+    // process watcher pick one non-deterministically — better to refuse the
+    // toggle and explain than to ship the user a confusing bug.
+    private void AutoTrigger_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.CheckBox cb) return;
+        if (cb.IsChecked != true) return;
+        if (DataContext is not GamesViewModel vm) return;
+        var editor = vm.Editor;
+        if (editor is null) return;
+
+        var conflict = vm.FindAutoTriggerConflict(editor.ProfileId, editor.ExePath);
+        if (conflict is null) return;
+
+        cb.IsChecked = false;
+
+        MessageBox.Show(
+            $"Can't enable auto-trigger here. Another profile (\"{conflict}\") is already set to auto-trigger when this game launches.\n\n" +
+            "If two profiles auto-triggered on the same .exe, only one would run — and which one wins is unpredictable. To enable it here, first turn off auto-trigger on the other profile (or point one of them at a different .exe).",
+            "Auto-trigger conflict",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
+    }
+
+    // Launch the modal timing-test dialog. The dialog drives its own
+    // CalibrationRunner lifecycle; we just need to parent it to the main
+    // window so it positions correctly.
+    private void RunTimingTest_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new CalibrationDialog
+        {
+            Owner = Window.GetWindow(this),
+        };
+        dlg.ShowDialog();
+    }
+
     // Double-clicking a row in the available-devices picker adds it to the
     // profile. ListBoxItem raises a direct MouseDoubleClick that the parent
     // ListBox doesn't see, so we hook the item container instead.

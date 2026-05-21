@@ -389,6 +389,6 @@ a signed, MIT-licensed kernel filter driver that does the actual device hiding.
 Without his work none of this would be possible. Huge thanks for the tireless
 work maintaining and improving it.
 
-- Built by [Josh Racine](https://github.com/Ginger-Beard).
+- Maintained by [Ginger-Beard](https://github.com/Ginger-Beard).
 - VID data curated for sim racing hardware; upstream USB ID database at
   [usbutils](https://github.com/gregkh/usbutils).

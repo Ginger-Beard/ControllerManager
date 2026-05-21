@@ -488,7 +488,7 @@
                     <TextBlock Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,8">
                         <Run Text="Controller Manager — per-game HID device profile manager."/>
                         <LineBreak/>
-                        <Run Text="Built by Josh Racine.  Source: "/>
+                        <Run Text="Source: "/>
                         <Hyperlink Command="{Binding OpenRepoCommand}">github.com/Ginger-Beard/ControllerManager</Hyperlink>
                     </TextBlock>
 

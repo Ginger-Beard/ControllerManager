@@ -232,4 +232,23 @@ public sealed class GamesViewModel : ViewModelBase
             }
         });
     }
+
+    /// <summary>
+    /// Returns the name of another auto-triggered profile that shares the given
+    /// executable path, or null if there's no conflict. The current profile (by
+    /// id) is excluded so editing your own auto-trigger toggle never self-flags.
+    /// </summary>
+    public string? FindAutoTriggerConflict(Guid? currentProfileId, string exePath)
+    {
+        if (string.IsNullOrWhiteSpace(exePath)) return null;
+        var normalized = exePath.Trim();
+        foreach (var p in Profiles)
+        {
+            if (currentProfileId.HasValue && p.Id == currentProfileId.Value) continue;
+            if (!p.ProcessWatcherEnabled) continue;
+            if (string.Equals(p.GameExecutablePath?.Trim(), normalized, StringComparison.OrdinalIgnoreCase))
+                return p.Name;
+        }
+        return null;
+    }
 }
