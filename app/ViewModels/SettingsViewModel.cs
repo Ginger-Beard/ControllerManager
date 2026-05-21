@@ -8,7 +8,7 @@ namespace ControllerManager.ViewModels;
 public sealed class SettingsViewModel : ViewModelBase
 {
     private readonly SettingsStore _store;
-    private AppSettings _settings;
+    private readonly AppSettings _settings;
 
     private bool     _startWithWindows;
     private bool     _startMinimized;

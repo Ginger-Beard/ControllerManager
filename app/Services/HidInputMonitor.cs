@@ -213,12 +213,10 @@ public sealed class HidInputMonitor : IDisposable
                             // Without this, axes with negative LogicalMin (sticks, signed
                             // trigger encodings) clamp to 1.0 instead of swinging around
                             // their zero point.
-                            int signed;
                             long bitWidthCount = (long)ax.LogicalMax - ax.LogicalMin + 1;
-                            if (ax.LogicalMin < 0 && raw > (uint)ax.LogicalMax)
-                                signed = (int)((long)raw - bitWidthCount);
-                            else
-                                signed = (int)raw;
+                            int signed = (ax.LogicalMin < 0 && raw > (uint)ax.LogicalMax)
+                                ? (int)((long)raw - bitWidthCount)
+                                : (int)raw;
 
                             int range = ax.LogicalMax - ax.LogicalMin;
                             float norm = range <= 0 ? 0f

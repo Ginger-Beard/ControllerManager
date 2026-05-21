@@ -168,7 +168,7 @@ public partial class App : Application
         Tray?.Dispose();
         Ipc?.Dispose();
         HidHide?.EndGameSession();
-        try { _mutex?.ReleaseMutex(); } catch { }
+        try { _mutex?.ReleaseMutex(); } catch (ApplicationException) { }
         _mutex?.Dispose();
         base.OnExit(e);
     }

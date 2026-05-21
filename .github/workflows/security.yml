@@ -37,6 +37,35 @@ jobs:
           config: |
             paths-ignore:
               - '**/obj/**'
+            # Quality-rule suppressions (security rules are unaffected):
+            #   unmanaged-code/call-to-unmanaged-code — P/Invoke is core to this
+            #     Windows hardware app (HidHide IOCTL, ETW, HID, WScript COM);
+            #     these rules just count call sites.
+            #   catch-of-all-exceptions / empty-catch-block — intentional
+            #     best-effort swallow during cleanup/Dispose paths (mutex
+            #     release, file delete on shutdown, ETW unsubscribe, etc.).
+            #   missed-using-statement — flags intentional try/finally Dispose
+            #     patterns used to guard partial-init failure (LaunchOrchestrator).
+            #   path-combine — Path.Combine style preference; no security risk.
+            #   linq/missed-where + linq/missed-select — style preference for
+            #     foreach+continue → .Where(); refactoring obscures the loop body.
+            query-filters:
+              - exclude:
+                  id: cs/call-to-unmanaged-code
+              - exclude:
+                  id: cs/unmanaged-code
+              - exclude:
+                  id: cs/catch-of-all-exceptions
+              - exclude:
+                  id: cs/empty-catch-block
+              - exclude:
+                  id: cs/missed-using-statement
+              - exclude:
+                  id: cs/path-combine
+              - exclude:
+                  id: cs/linq/missed-where
+              - exclude:
+                  id: cs/linq/missed-select
 
       - name: Build for CodeQL
         run: dotnet build app/ControllerManager.csproj -c Release

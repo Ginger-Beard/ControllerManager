@@ -186,6 +186,7 @@ public sealed class HidHideClient
     // The snapshot means a CM crash leaves session devices in the persistent BL; the user
     // will see them as globally hidden on next launch and can re-enable them from Devices tab.
 
+    /// <summary>Begins a game session: hides devices from the game and records always-visible ones.</summary>
     /// <param name="hideIds">Devices to hide from the game.</param>
     /// <param name="alwaysVisibleIds">Devices the game must see (KeepEnabled).
     /// Temporarily removed from the persistent BL if present, so profile intent wins
