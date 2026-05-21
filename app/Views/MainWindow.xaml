@@ -494,14 +494,7 @@
 
                     <Border Background="#F0F8F4" BorderBrush="#B8DEC8" BorderThickness="1"
                             CornerRadius="3" Padding="10,8" Margin="0,0,0,0">
-                        <TextBlock TextWrapping="Wrap" Foreground="#2A5A3A" FontSize="11">
-                            <Run FontWeight="SemiBold" Text="Huge thanks to Nefarius (Benjamin Höglinger-Stelzer)"/>
-                            <Run Text=" for "/>
-                            <Hyperlink Command="{Binding OpenHidHideHomeCommand}" Foreground="#2A7A4A">HidHide</Hyperlink>
-                            <Run Text=" — the signed kernel driver that does the actual device hiding. Controller Manager is nothing without it. Check out his work at "/>
-                            <Hyperlink Command="{Binding OpenNefariusCommand}" Foreground="#2A7A4A">nefarius.at</Hyperlink>
-                            <Run Text="."/>
-                        </TextBlock>
+                        <TextBlock TextWrapping="Wrap" Foreground="#2A5A3A" FontSize="11" xml:space="preserve"><Run FontWeight="SemiBold" Text="Huge thanks to Nefarius and the many other contributors to "/><Hyperlink Command="{Binding OpenHidHideHomeCommand}" Foreground="#2A7A4A">HidHide</Hyperlink><Run Text=" — the signed kernel driver that does the actual device hiding. Controller Manager is nothing without it. Check out his work at "/><Hyperlink Command="{Binding OpenNefariusCommand}" Foreground="#2A7A4A">nefarius.at</Hyperlink><Run Text="."/></TextBlock>
                     </Border>
 
                 </StackPanel>

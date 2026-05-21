@@ -41,7 +41,13 @@ public sealed class CalibrationRunner
         IReadOnlyList<DeviceActivity> Devices);
 
     /// <summary>
-    /// Capture a baseline rundown, await cancellation (user clicks "Done"),
+    /// Fires after the baseline rundown completes, so callers can launch the
+    /// target game once we've captured the "before" state.
+    /// </summary>
+    public event Action? BaselineCaptured;
+
+    /// <summary>
+    /// Capture a baseline rundown, await cancellation (caller stops the test),
     /// capture a final rundown, return the diff sorted by activity descending.
     /// </summary>
     public async Task<Result> RunAsync(CancellationToken ct)
@@ -50,6 +56,7 @@ public sealed class CalibrationRunner
         var baseline = await CaptureRundownAsync(TimeSpan.FromSeconds(5), ct);
         var baselineAt = DateTime.UtcNow;
         Logger.Write($"[Calibration] Baseline: {baseline.Count} device(s) snapshotted.");
+        try { BaselineCaptured?.Invoke(); } catch (Exception ex) { Logger.WriteException("BaselineCaptured handler", ex); }
 
         try { await Task.Delay(Timeout.InfiniteTimeSpan, ct); }
         catch (OperationCanceledException) { /* expected — user stopped the test */ }

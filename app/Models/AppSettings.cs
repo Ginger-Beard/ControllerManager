@@ -3,7 +3,13 @@ using ControllerManager.Models;
 
 namespace ControllerManager.Models;
 
-public enum LogLevel { Off, Normal, Verbose }
+// Order is meaningful — Logger uses `_level >= LogLevel.X` comparisons to gate
+// writes. Higher = chattier.
+//   Off      — nothing
+//   Normal   — orchestrator phase changes, errors
+//   Verbose  — per-device events, broker/PID details
+//   Debug    — firehose: HIDCLASS Rundown payloads, etc.
+public enum LogLevel { Off, Normal, Verbose, Debug }
 
 public sealed class AppSettings
 {

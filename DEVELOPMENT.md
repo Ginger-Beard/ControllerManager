@@ -379,13 +379,34 @@ forwards:
 
 ## Open work
 
-### Auto-detect timing (Calibration Mode) — built, may need iteration
+### Auto-detect timing (Calibration Mode) — built, hidden, paused for design
 
-**Status**: Shipped. `CalibrationRunner` + `CalibrationDialog` use HIDCLASS
-Rundown snapshot diffing to measure per-device activity during a user session.
-Open question is now empirical: does the diff cleanly separate "game-used"
-devices from "broker keeps the handle warm" noise across enough games to be
-useful? Need real-world testing.
+**Status**: Code is shipped but the UI entry point is **hidden** until we
+work out the design questions below. `CalibrationRunner` + `CalibrationDialog`
+remain in the codebase; the "Run timing test" button in `GamesView.xaml` is
+`Visibility="Collapsed"`. Re-enable when ready to iterate.
+
+#### The hard observability limit (the reason this is paused)
+
+We can't directly observe what slot the game assigned to each device. That
+mapping lives inside the game process. Everything we can see (HIDCLASS
+rundown `NumReadReports`, FileIOCreate events, HID input/output reports)
+is **proxy data**. Two signals are available:
+
+1. **"Did this device get reads at all?"** — achievable via HIDCLASS rundown
+   diff. Tells us whether the game *saw* a device. Useful for detecting
+   "reveal happened too late, game missed this device entirely."
+2. **"Which slot did this device end up in?"** — not achievable from outside
+   the game process. Read counts can't reliably distinguish "game thinks
+   this is slot #1" from "broker is polling everything it has handles for."
+   For racing games specifically, wheel + pedals + paddles all get heavy
+   reads regardless of slot, so ranking by reads doesn't recover slot order.
+
+The original ambition ("auto-loop until two clean runs without tweaks")
+requires answer #2, which we can't get without either:
+- User-in-the-loop feedback per iteration ("did the wheel get FFB?"), or
+- A slot-detection signal we haven't found yet (test FFB pulse + observation?
+  ETW provider we haven't discovered? Game-specific telemetry?).
 
 #### How it works
 
@@ -441,6 +462,8 @@ signalled by `Rundown/Stop` (EventID 2). One snapshot ≈ 10ms in practice.
   may go up for several devices — distinguishing "actively used by game" vs
   "broker keeping warm" needs empirical study. The user reads the table and
   decides; we don't auto-apply.
+- **No slot detection.** See observability limit above. We can tell if the
+  game *saw* a device, but not which slot it assigned.
 - **No persistence yet.** Each calibration is one-shot. No history, no
   "compare to previous run." Easy to add when Phase 2 (below) gets built.
 - **No "apply to profile" button yet.** User reads the table, manually
@@ -450,6 +473,38 @@ signalled by `Rundown/Stop` (EventID 2). One snapshot ≈ 10ms in practice.
   logging is enabled (separate from calibration). It captures one HIDCLASS
   rundown at game-launch time and logs FileIOCreate events — overlaps with
   calibration but useful for general debugging. Could be deduplicated later.
+
+#### Three tiers of automation (for when this work resumes)
+
+Three honest levels of ambition, picked based on whether we ever crack the
+slot-detection problem:
+
+**A. Auto-launch + diagnose (current code, one-shot).** One click: capture
+baseline → launch game (via current dialog flow) → wait → measure → kill →
+report deltas. User reads the table and decides what to tweak themselves.
+This is what `CalibrationDialog` does today. No slot detection needed.
+
+**B. Auto-loop on the "all devices saw reads" criterion.** Iterate the
+`LaunchOrchestrator` full flow (with hide + reveal) using the current
+profile's timing. After each run, check whether every profile device got
+reads > 0. If a RAS device got zero, decrement its reveal time by ~1s and
+retry. Succeed when two consecutive iterations have all devices showing
+reads. 5-minute hard timeout. **Does NOT verify slot order** — user has to
+test in-game afterward. Buildable today; just needs the loop driver +
+profile-mutation logic on top of the existing runner.
+
+**C. Full auto-calibrate (slot-order convergence).** Iterate until the
+right device is in slot #1 *and* the others are in the user's intended
+order. Requires either:
+- User feedback per iteration ("did it work?" yes/no/which device was wrong)
+- A slot-detection signal we haven't found yet
+
+Until one of those lands, C isn't buildable without false confidence.
+
+**Recommendation**: when work resumes, do **A** properly first (wire an
+"Apply tweaks" button onto the dialog, persist results). If A's signal turns
+out reliable in real-world testing, promote to **B**. Don't attempt C until
+slot detection is solved.
 
 #### Phase 2 — Continuous monitoring (weak maybe, possibly excessive)
 

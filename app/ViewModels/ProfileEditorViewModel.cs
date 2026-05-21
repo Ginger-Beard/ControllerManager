@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Text;
 using System.Windows.Input;
 using ControllerManager.Models;
 using ControllerManager.Services;
@@ -56,7 +55,8 @@ public sealed class ProfileEditorViewModel : ViewModelBase
             {
                 IsDirty = true;
                 OnPropertyChanged(nameof(WaitForFirstDevice));
-                OnPropertyChanged(nameof(Timeline));
+                OnPropertyChanged(nameof(TimelineSections));
+                OnPropertyChanged(nameof(TimelineHasContent));
             }
         }
     }
@@ -79,7 +79,8 @@ public sealed class ProfileEditorViewModel : ViewModelBase
             if (Set(ref _postAcquisitionDelaySeconds, Math.Max(0, value)))
             {
                 IsDirty = true;
-                OnPropertyChanged(nameof(Timeline));
+                OnPropertyChanged(nameof(TimelineSections));
+                OnPropertyChanged(nameof(TimelineHasContent));
             }
         }
     }
@@ -117,76 +118,87 @@ public sealed class ProfileEditorViewModel : ViewModelBase
     public bool HasRevealAfterStart =>
         Assignments.Any(a => a.Role == DeviceRole.RevealAfterStart);
 
-    // Live, human-readable description of what happens when this profile runs.
-    // Rebuilt from current Assignments + checkbox/delay state every time any
-    // input changes, so the user sees the actual timeline as they tweak.
-    public string Timeline => BuildTimeline();
+    // Structured timeline used by the "Explain this profile" expander.
+    // Each section renders as: a subdued header line + a one-line description
+    // for non-technical users + a row of device chips.
+    public sealed record TimelineDevice(string Name, string? Detail);
+    public sealed record TimelineSection(string Header, string Description, IReadOnlyList<TimelineDevice> Devices);
 
-    private string BuildTimeline()
+    public IReadOnlyList<TimelineSection> TimelineSections => BuildTimelineSections();
+    public bool TimelineHasContent => TimelineSections.Count > 0;
+
+    /// <summary>
+    /// Plain-English intro shown at the top of the "Explain this profile"
+    /// expander. Sets context for users who don't yet understand the role/
+    /// timing system.
+    /// </summary>
+    public string TimelineIntro =>
+        "Here's what Controller Manager attempts to do when this game launches. " +
+        "Devices in this profile show up as you've configured; any device you " +
+        "didn't add stays hidden from this game while you're playing. " +
+        "Games can be quirky about how they pick up controllers, so if the order " +
+        "isn't coming out the way you want, try tweaking the per-device times below.";
+
+    /// <summary>
+    /// Heads-up note shown at the bottom of the expander for sim-rig users who
+    /// might be running into the Forza multi-device flakiness issue (and the
+    /// general 'too many HIDs confuses the game' pattern). Linked into the
+    /// vJoy + SimHub Control Mapper consolidation workaround documented in
+    /// the README.
+    /// </summary>
+    public string TimelineSimRigNote =>
+        "Heads up — a full sim rig (wheel + pedals + shifter + handbrake + button box + paddles) " +
+        "sometimes overwhelms Forza Horizon and similar titles regardless of timing. " +
+        "If the game drops or misassigns devices even with the timing dialed in, the " +
+        "fix used by experienced sim racers is to consolidate inputs through vJoy + " +
+        "SimHub's Control Mapper so the game only sees your wheel + one virtual device. " +
+        "See the Forza cookbook in the README for the full recipe.";
+
+    private IReadOnlyList<TimelineSection> BuildTimelineSections()
     {
         var av  = Assignments.Where(a => a.Role == DeviceRole.AlwaysVisible).ToList();
-        var ras = Assignments.Where(a => a.Role == DeviceRole.RevealAfterStart).ToList();
+        // Sort RAS by reveal time so chips read left-to-right in firing order.
+        var ras = Assignments
+            .Where(a => a.Role == DeviceRole.RevealAfterStart)
+            .OrderBy(a => a.DelaySeconds)
+            .ThenBy(a => Assignments.IndexOf(a))  // stable for equal times
+            .ToList();
 
         if (av.Count == 0 && ras.Count == 0)
-            return "Add devices above to see what will happen at game launch.";
+            return Array.Empty<TimelineSection>();
 
-        var sb = new StringBuilder();
+        var sections = new List<TimelineSection>();
 
-        sb.Append("At launch: ");
-        if (av.Count > 0)
-        {
-            sb.Append(string.Join(", ", av.Select(a => a.FriendlyName)));
-            sb.AppendLine(av.Count == 1 ? " is visible to the game." : " are visible to the game.");
-        }
-        else
-        {
-            sb.AppendLine("nothing is visible to the game yet.");
-        }
+        // At launch: AV devices
+        var avDevices = av.Count == 0
+            ? new List<TimelineDevice> { new("(nothing yet)", null) }
+            : av.Select(a => new TimelineDevice(a.FriendlyName, null)).ToList();
+        sections.Add(new TimelineSection(
+            "Visible at launch",
+            "These are the controllers the game can see the moment it starts. The game usually grabs whichever it sees first as 'controller #1' — typically where you want your force feedback wheel. Games don't always cooperate though, so you may have to experiment.",
+            avDevices));
 
-        if (ras.Count == 0)
-        {
-            sb.Append("Anything not in this profile stays hidden for this game.");
-            return sb.ToString();
-        }
+        if (ras.Count == 0) return sections;
 
         if (WaitForFirstDevice && av.Count > 0)
         {
-            sb.AppendLine();
-            sb.Append("When the game first opens ");
-            sb.Append(av[0].FriendlyName);
-            sb.AppendLine(":");
-            sb.Append("  ");
-            sb.Append(string.Join(", ", ras.Select(a => a.FriendlyName)));
-            sb.Append(ras.Count == 1 ? " appears " : " all appear ");
-            sb.Append(_postAcquisitionDelaySeconds.ToString("0.###"));
-            sb.AppendLine("s later, back-to-back.");
-            sb.AppendLine();
-            sb.AppendLine("Backup (if the game never directly opens that device — some use RawInput/WGI):");
-            foreach (var r in ras)
-            {
-                sb.Append("  • ");
-                sb.Append(r.FriendlyName);
-                sb.Append(" appears at ");
-                sb.Append(r.DelaySeconds.ToString("0.###"));
-                sb.AppendLine("s.");
-            }
+            var grace = _postAcquisitionDelaySeconds.ToString("0.###");
+            // Per-row time is ADDITIVE to the grace when this checkbox is on.
+            // vJoy at 5s + grace at 5s = vJoy fires 10s after wheel opens.
+            sections.Add(new TimelineSection(
+                $"After the game opens {av[0].FriendlyName} — wait {grace}s, then reveal",
+                $"Once the game starts using your wheel, Controller Manager waits {grace} seconds (giving the game time to commit the wheel to slot #1). Each device below then reveals after its own additional offset. Set all rows to 0 to fire them back-to-back at grace; stagger them (e.g. 0s, 1s, 2s) to give each its own slot. Total wait after the wheel opens = {grace}s + per-row offset.\n\nIf the signal never fires (some games using Windows' GameInput, like Forza Horizon, don't directly open the wheel), reveals fall back to absolute times after a 60s timeout — but that's likely too late to matter. For those games, uncheck this box and use the per-row times directly.",
+                ras.Select(r => new TimelineDevice(r.FriendlyName, $"+{r.DelaySeconds:0.###}s after grace")).ToList()));
         }
         else
         {
-            sb.AppendLine();
-            sb.AppendLine("After launch:");
-            foreach (var r in ras)
-            {
-                sb.Append("  • ");
-                sb.Append(r.FriendlyName);
-                sb.Append(" appears at ");
-                sb.Append(r.DelaySeconds.ToString("0.###"));
-                sb.AppendLine("s.");
-            }
+            sections.Add(new TimelineSection(
+                "Revealed after launch",
+                "Each of these controllers stays hidden when the game starts, then attempts to appear at the time you set on its row (seconds from game launch). Staggering the times (e.g. 11.0s, 11.1s, 11.2s) gives each one its own controller slot in the game. If a device isn't ending up in the right slot, try adjusting its time.",
+                ras.Select(r => new TimelineDevice(r.FriendlyName, $"at {r.DelaySeconds:0.###}s")).ToList()));
         }
 
-        sb.Append("Anything not in this profile stays hidden for this game.");
-        return sb.ToString();
+        return sections;
     }
 
     public HidDevice? SelectedAvailable
@@ -214,7 +226,8 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         {
             OnPropertyChanged(nameof(UnassignedDevices));
             OnPropertyChanged(nameof(HasRevealAfterStart));
-            OnPropertyChanged(nameof(Timeline));
+            OnPropertyChanged(nameof(TimelineSections));
+            OnPropertyChanged(nameof(TimelineHasContent));
         };
 
         AddCommand = new RelayCommand(
@@ -309,7 +322,8 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         // Track edits so unsaved-changes indicator is accurate; also recompute
         // HasRevealAfterStart when an assignment's role changes.
         IsDirty = true;
-        OnPropertyChanged(nameof(Timeline));
+        OnPropertyChanged(nameof(TimelineSections));
+        OnPropertyChanged(nameof(TimelineHasContent));
         if (e.PropertyName is not nameof(DeviceAssignmentViewModel.Role)) return;
 
         OnPropertyChanged(nameof(HasRevealAfterStart));
@@ -405,7 +419,8 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         OnPropertyChanged(nameof(ProcessWatcherEnabled));
         OnPropertyChanged(nameof(AcquisitionTrigger));
         OnPropertyChanged(nameof(WaitForFirstDevice));
-        OnPropertyChanged(nameof(Timeline));
+        OnPropertyChanged(nameof(TimelineSections));
+        OnPropertyChanged(nameof(TimelineHasContent));
         OnPropertyChanged(nameof(PostAcquisitionDelaySeconds));
         OnPropertyChanged(nameof(HasRevealAfterStart));
     }

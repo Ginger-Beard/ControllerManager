@@ -147,7 +147,12 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
             // This catches the IOCTL flow we care about for WGI titles (game ↔
             // GameInputSvc IPC ends up here as HID class IOCTLs against the
             // broker's already-open handles).
-            if (_logAllHidOpens)
+            //
+            // Only enable when the user is at Debug level (above Verbose) —
+            // HIDCLASS Rundown fires one event per HID device on enable, and
+            // we don't want to burn the CPU collecting/parsing them just to
+            // throw them away inside the handler at lower log levels.
+            if (_logAllHidOpens && Logger.CurrentLevel >= Models.LogLevel.Debug)
             {
                 _session.EnableProvider(HidClassProviderGuid, TraceEventLevel.Verbose);
                 var dyn = new DynamicTraceEventParser(_session.Source);
@@ -238,9 +243,14 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
     // Diagnostic handler for Microsoft-Windows-Input-HIDCLASS events. The
     // provider is undocumented externally — we don't know the event schema
     // ahead of time — so dump every accessible payload field by name.
+    //
+    // Logged at Debug (above Verbose) because HIDCLASS Rundown is firehose-
+    // chatty (one event per HID device per rundown) and would drown out
+    // useful Verbose orchestrator/acquisition output otherwise.
     private void OnHidClassEvent(TraceEvent data)
     {
         if (data.ProviderGuid != HidClassProviderGuid) return;
+        if (Logger.CurrentLevel < Models.LogLevel.Debug) return;
 
         var elapsed = _sessionClock.Elapsed.TotalSeconds;
         var sb = new StringBuilder(256);
@@ -262,7 +272,7 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
             }
         }
 
-        Logger.WriteVerbose(sb.ToString());
+        Logger.WriteDebug(sb.ToString());
     }
 
     // ETW reports HID device opens in a few NT path forms. The exact form

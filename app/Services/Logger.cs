@@ -40,6 +40,12 @@ public static class Logger
         AppendLine(message);
     }
 
+    public static void WriteDebug(string message)
+    {
+        if (_path is null || _level < LogLevel.Debug) return;
+        AppendLine(message);
+    }
+
     public static void WriteException(string context, Exception ex)
     {
         if (_path is null || _level == LogLevel.Off) return;

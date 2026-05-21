@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using ControllerManager.Services;
 
@@ -7,39 +9,104 @@ public partial class CalibrationDialog : Window
 {
     private readonly CalibrationRunner             _runner = new();
     private readonly CancellationTokenSource       _cts    = new();
+    private readonly string                        _gameExePath;
+    private readonly string                        _gameDisplayName;
     private Task<CalibrationRunner.Result>?        _runTask;
+    private Process?                               _gameProcess;
 
-    public CalibrationDialog()
+    public CalibrationDialog(string gameExePath, string gameDisplayName)
     {
         InitializeComponent();
-        Loaded  += OnLoaded;
-        Closing += OnClosing;
+        _gameExePath     = gameExePath;
+        _gameDisplayName = string.IsNullOrEmpty(gameDisplayName) ? "the game" : gameDisplayName;
+        Title            = $"Timing test — {_gameDisplayName}";
+        Closing         += OnClosing;
+
+        if (string.IsNullOrWhiteSpace(_gameExePath) || !File.Exists(_gameExePath))
+        {
+            StartButton.IsEnabled = false;
+            StatusText.Text       = "Profile has no valid game executable.";
+        }
     }
 
-    private void OnLoaded(object sender, RoutedEventArgs e)
+    private void StartButton_Click(object sender, RoutedEventArgs e)
     {
-        // Kick off the test on a background task. The runner captures the
-        // baseline snapshot immediately, then waits on the cancellation token.
-        StatusText.Text = "Baseline snapshot in progress...";
-        _runTask = Task.Run(() => _runner.RunAsync(_cts.Token));
+        // Sequence: capture baseline → launch game → wait for user to click
+        // Stop → terminate game → capture final → show results.
+        StartButton.Visibility = Visibility.Collapsed;
+        StopButton.Visibility  = Visibility.Visible;
+        StopButton.Content     = $"Stop {_gameDisplayName} and show results";
+        StopButton.IsEnabled   = false;  // disabled until game actually launches
+        StatusText.Text        = "Capturing baseline...";
+        WaitingText.Text       = "Capturing baseline. Game will launch automatically.";
 
-        // Update status once baseline is done (we don't have a direct hook,
-        // but a short delay is fine — baseline capture is sub-second in
-        // practice).
-        Task.Delay(TimeSpan.FromSeconds(1)).ContinueWith(_ =>
+        // Launch the game as soon as the baseline is captured. The runner
+        // fires BaselineCaptured on its background thread; marshal to UI.
+        _runner.BaselineCaptured += OnBaselineCaptured;
+        _runTask = Task.Run(() => _runner.RunAsync(_cts.Token));
+    }
+
+    private void OnBaselineCaptured()
+    {
+        Dispatcher.Invoke(() =>
         {
-            Dispatcher.Invoke(() =>
+            StatusText.Text  = "Baseline captured. Launching game...";
+            WaitingText.Text = $"Game is running. Let it load through to a menu (~30s), then click Stop.";
+
+            try
             {
-                if (StopButton.IsEnabled)
-                    StatusText.Text = "Baseline ready. Play the game now.";
-            });
+                _gameProcess = Process.Start(new ProcessStartInfo
+                {
+                    FileName         = _gameExePath,
+                    UseShellExecute  = true,
+                    WorkingDirectory = Path.GetDirectoryName(_gameExePath) ?? "",
+                });
+
+                if (_gameProcess is null)
+                {
+                    StatusText.Text = "Game failed to launch (no process handle).";
+                    return;
+                }
+
+                StopButton.IsEnabled = true;
+                StatusText.Text      = $"Launched {_gameDisplayName} (PID {_gameProcess.Id}). Stop when ready.";
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text      = $"Failed to launch game: {ex.Message}";
+                StopButton.IsEnabled = true;  // user can still stop to see baseline-only results
+            }
         });
     }
 
     private async void StopButton_Click(object sender, RoutedEventArgs e)
     {
         StopButton.IsEnabled = false;
-        StatusText.Text      = "Capturing final snapshot...";
+        StatusText.Text      = $"Stopping {_gameDisplayName}...";
+
+        // Try to terminate the game on a worker thread (don't block UI). For
+        // a measurement-only run we don't care about saved state, so a hard
+        // kill after a short graceful attempt is fine.
+        await Task.Run(() =>
+        {
+            try
+            {
+                if (_gameProcess is { HasExited: false } proc)
+                {
+                    try { proc.CloseMainWindow(); } catch { }
+                    if (!proc.WaitForExit(3000))
+                    {
+                        try { proc.Kill(entireProcessTree: true); } catch { }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteVerbose($"[Calibration] Game termination error: {ex.Message}");
+            }
+        });
+
+        StatusText.Text = "Capturing final snapshot...";
 
         // Cancel the runner's internal wait so it proceeds to the final
         // rundown, then await its result.
@@ -88,9 +155,21 @@ public partial class CalibrationDialog : Window
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        // Make sure the runner stops cleanly if the user closes the window
-        // without clicking Stop first.
+        // Make sure the runner stops cleanly and the game is terminated if
+        // the user closes the window without clicking Stop first.
         try { _cts.Cancel(); } catch { }
+        try
+        {
+            if (_gameProcess is { HasExited: false } proc)
+            {
+                try { proc.CloseMainWindow(); } catch { }
+                if (!proc.WaitForExit(1500))
+                {
+                    try { proc.Kill(entireProcessTree: true); } catch { }
+                }
+            }
+        }
+        catch { }
     }
 
     // ── Row view-model for the DataGrid ──────────────────────────────────────

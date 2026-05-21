@@ -89,6 +89,7 @@
                 <CheckBox Content="Auto-trigger this profile when the game launches"
                           IsChecked="{Binding Editor.ProcessWatcherEnabled}"
                           Click="AutoTrigger_Click"
+                          HorizontalAlignment="Left"
                           Margin="0,0,0,4"
                           ToolTip="When on, Controller Manager will detect the game starting and apply this profile automatically. When off, you must launch via the Dashboard, a shortcut, or the Steam wrapper."/>
 
@@ -100,6 +101,7 @@
 
                     <CheckBox Content="Wait until the game opens the first device before revealing the rest"
                               IsChecked="{Binding Editor.WaitForFirstDevice}"
+                              HorizontalAlignment="Left"
                               Margin="0,4,0,0"
                               ToolTip="When on, Controller Manager watches for the moment the game touches your wheel and then reveals the rest. Faster and more reliable for FFB games like Forza. When off, each device reveals at the fixed time you set on its row below."/>
 
@@ -125,7 +127,7 @@
 
             <Separator Grid.Row="1" Margin="0,0,0,10"/>
 
-            <!-- ── Assignments label + explainer + live preview ──────────── -->
+            <!-- ── Assignments label + "Explain this profile" disclosure ───── -->
             <StackPanel Grid.Row="2" Margin="0,4,0,4">
                 <DockPanel>
                     <Label DockPanel.Dock="Left" Content="Devices in this profile"
@@ -136,22 +138,90 @@
                                Text="Drag ☰ to reorder."/>
                 </DockPanel>
 
-                <!-- Static explainer: how the roles + 'not in list' work -->
-                <TextBlock TextWrapping="Wrap" Margin="0,4,0,0"
-                           Foreground="#666" FontSize="11">
-                    <Run FontWeight="SemiBold">Always Visible</Run><Run Text=" — the game sees this device immediately at launch (your wheel, your gamepad)."/><LineBreak/>
-                    <Run FontWeight="SemiBold">Reveal After Start</Run><Run Text=" — hidden when the game starts, then appears at the time you set on its row. Staggered times (e.g. 11.0, 11.1, 11.2) give each device its own in-game slot."/><LineBreak/>
-                    <Run Text="Anything not in this list is hidden during the game."/>
-                </TextBlock>
+                <Expander Header="Explain this profile" Margin="0,4,0,0"
+                          IsExpanded="False"
+                          Foreground="#555"
+                          Visibility="{Binding Editor.TimelineHasContent,
+                              Converter={StaticResource BoolVisConverter}}">
+                    <!-- Cap height so opening the expander never pushes the
+                         device list / picker / action buttons off-screen.
+                         Content scrolls if the user has lots of devices. -->
+                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="2,6,2,2">
+                            <TextBlock Text="{Binding Editor.TimelineIntro}"
+                                       TextWrapping="Wrap"
+                                       Foreground="#555" FontSize="11"
+                                       Margin="0,0,0,8"/>
+                            <ItemsControl ItemsSource="{Binding Editor.TimelineSections}"
+                                          Margin="0,0,0,4">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,0,0,10">
+                                            <TextBlock Text="{Binding Header}"
+                                                       Foreground="#333" FontSize="11"
+                                                       FontWeight="SemiBold"
+                                                       TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding Description}"
+                                                       Foreground="#666" FontSize="11"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,2,0,4"/>
+                                            <ItemsControl ItemsSource="{Binding Devices}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <WrapPanel/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <!-- Device chip: name + optional detail (e.g. "at 11.1s") -->
+                                                        <Border Background="#EAF2FA"
+                                                                BorderBrush="#B5CFE5"
+                                                                BorderThickness="1"
+                                                                CornerRadius="10"
+                                                                Padding="8,2"
+                                                                Margin="0,2,4,2">
+                                                            <StackPanel Orientation="Horizontal">
+                                                                <TextBlock Text="{Binding Name}"
+                                                                           FontSize="11" Foreground="#234"/>
+                                                                <TextBlock Text="{Binding Detail}"
+                                                                           FontSize="11" Foreground="#678"
+                                                                           Margin="6,0,0,0">
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Style.Triggers>
+                                                                                <Trigger Property="Text" Value="">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </Trigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
 
-                <!-- Live preview: built from current state, updates as user tweaks -->
-                <Border Background="#F4F8FC" BorderBrush="#BFD0E0" BorderThickness="1"
-                        Padding="8,6" Margin="0,6,0,0" CornerRadius="3">
-                    <TextBlock Text="{Binding Editor.Timeline}"
-                               TextWrapping="Wrap"
-                               FontFamily="Consolas" FontSize="11"
-                               Foreground="#333"/>
-                </Border>
+                            <!-- Sim-rig consolidation tip — for users hitting the
+                                 "Forza loses devices past a handful of HIDs" issue
+                                 (and similar engine limitations in other titles). -->
+                            <Border Background="#FFF8E1"
+                                    BorderBrush="#E6CC8A"
+                                    BorderThickness="1"
+                                    CornerRadius="3"
+                                    Padding="8,6"
+                                    Margin="0,6,0,0">
+                                <TextBlock Text="{Binding Editor.TimelineSimRigNote}"
+                                           TextWrapping="Wrap"
+                                           Foreground="#5C4A0E" FontSize="11"/>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Expander>
             </StackPanel>
 
             <!-- ── Assignments list (resizable, drag-drop reorderable) ────── -->
@@ -228,7 +298,7 @@
                                                                     UpdateSourceTrigger=LostFocus,
                                                                     StringFormat={}{0:0.###},
                                                                     ConverterCulture=en-US}"
-                                                     ToolTip="How many seconds after the game starts before this device is revealed. Stagger pedals and shifter slightly so they get the right in-game slot (e.g. 11, 11.1, 11.2). If acquisition mode is on, the reveal happens sooner when the game opens the wheel — these numbers then act as a fallback."/>
+                                                     ToolTip="When 'Wait until the game opens the first device' is OFF: seconds from game launch until this device is revealed. Stagger times (e.g. 11.0, 11.1, 11.2) to give each device its own slot.&#x0a;&#x0a;When that checkbox is ON: an additional offset added on top of the grace period. So with grace=1.5s and this row=2s, the device reveals 3.5s after the game opens the wheel. Use 0 to fire at grace; stagger for slot ordering (e.g. 0, 1, 2)."/>
                                             <TextBlock Text="s" VerticalAlignment="Center" Margin="1,0,0,0"/>
                                         </StackPanel>
 
@@ -282,7 +352,7 @@
                           Margin="8,0,0,0"/>
                 <TextBlock>
                     <Run Text="Add devices to profile"/>
-                    <Run Text=" — anything you don't add stays hidden when you play"
+                    <Run Text=" — Leave here to hide"
                          Foreground="#888" FontStyle="Italic"/>
                 </TextBlock>
             </DockPanel>
@@ -348,16 +418,24 @@
                             <TextBlock Text="Start Menu" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
+                    <!-- Hidden for now — Steam launch wrapper still triggers UAC on every launch;
+                         turn back on once the launcher-binary split lands (see DEVELOPMENT.md). -->
                     <Button Command="{Binding CopySteamCommandCommand}"
                             Padding="8,4" Margin="6,0,0,0"
+                            Visibility="Collapsed"
                             ToolTip="Copy the Steam Launch Options command.&#x0a;Paste into Steam → right-click game → Properties → Launch Options.">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="🎮" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
                             <TextBlock Text="Copy Steam Command" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
+                    <!-- Hidden for now — Calibration Mode infrastructure works, but slot-order
+                         observability is unsolved; surfacing this would give users false confidence
+                         until either user-in-the-loop feedback or a slot-detection signal is built.
+                         See DEVELOPMENT.md → "Auto-detect timing". -->
                     <Button Click="RunTimingTest_Click"
                             Padding="8,4" Margin="12,0,0,0"
+                            Visibility="Collapsed"
                             ToolTip="Run a timing test: launch your game with everything visible, play for 15-30s, and Controller Manager will measure which devices the game actually uses. Helps figure out reveal order and timing.">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="⏱" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>

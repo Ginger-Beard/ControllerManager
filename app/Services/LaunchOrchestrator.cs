@@ -406,19 +406,31 @@ public sealed class LaunchOrchestrator : IDisposable
 
     // ── Phase 3: reveal devices one by one ───────────────────────────────────────
     //
-    // DeviceRef.DelaySeconds is an ABSOLUTE time from when this phase started
-    // (effectively "seconds after game launch + hide-setup"). Two paths through
-    // the same loop:
+    // Two modes, controlled by Profile.AcquisitionTrigger:
     //
-    //   • Timer mode (no acquisition signal): each reveal waits until T+Xs, then
-    //     fires. List order + clamping ensures monotonically increasing reveals.
+    //   • Timer mode (checkbox OFF): each device's DelaySeconds is an ABSOLUTE
+    //     time from when this phase started (effectively "seconds after game
+    //     launch + hide setup"). Reveal fires at max(DelaySeconds, lastReveal)
+    //     so list order is preserved even with non-monotonic user values.
     //
-    //   • Acquisition signal short-circuit: while we're waiting on a device's
-    //     T+Xs, if the ETW watcher fires, we cut the wait short, apply the post-
-    //     acquisition grace period once, then fire all remaining reveals
-    //     back-to-back. The user's T+Xs values become a safety net — if ETW
-    //     never fires (game uses RawInput/WGI/etc.), the reveals still happen
-    //     at the configured times rather than running 30s late.
+    //   • Acquisition mode (checkbox ON): the phase first waits for the ETW
+    //     watcher to fire (with a 60s hard timeout fallback). Then a grace
+    //     period (PostAcquisitionDelaySeconds) elapses. After that, each
+    //     device's DelaySeconds is treated as an OFFSET added to the
+    //     "grace ended" moment — so the user can stagger reveals after grace
+    //     by setting per-row values (e.g. vJoy=0s, shifter=1s, handbrake=2s).
+    //     Setting all rows to 0 makes them fire back-to-back at grace+0.
+    //
+    // The semantics of DelaySeconds intentionally differ between modes (absolute
+    // in Timer, relative-to-grace in Acquisition). The "Explain this profile"
+    // expander spells this out to the user.
+    //
+    // Fallback: if Acquisition mode is on and the signal never arrives within
+    // 60 seconds, we log clearly and treat DelaySeconds as absolute for the
+    // rest of the phase. That way Forza Horizon and other WGI titles (where
+    // the signal can't fire because the broker pre-opened the device files)
+    // don't leave the user without their devices — they just get the Timer-
+    // mode behavior with a one-line warning to switch the checkbox off.
 
     private async Task RevealDisableThenRestore(Profile profile, CancellationToken ct)
     {
@@ -434,60 +446,69 @@ public sealed class LaunchOrchestrator : IDisposable
         var revealed       = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var phaseStart     = DateTime.UtcNow;
         double lastRevealAtMs = 0;
-        bool   acquisitionHandled = false; // true once we've applied the post-signal grace
 
+        // In Timer mode this stays 0 (per-row times are absolute). In Acquisition
+        // mode, it's set to the moment grace ends — per-row times are then added
+        // to this baseline.
+        double phaseOffsetMs = 0;
+
+        // ── If Acquisition mode is on, wait for signal + grace upfront ──────
+        if (profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened
+            && profile.DisableThenRestore.Count > 0)
+        {
+            const int SignalTimeoutMs = 60_000;
+            var deadline = DateTime.UtcNow.AddMilliseconds(SignalTimeoutMs);
+
+            while (!_firstDeviceAcquired)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (DateTime.UtcNow >= deadline) break;
+                await Task.Delay(250, ct);
+            }
+
+            if (_firstDeviceAcquired)
+            {
+                var graceMs = (int)Math.Max(0, profile.PostAcquisitionDelaySeconds * 1000.0);
+                if (graceMs > 0)
+                {
+                    Log($"Acquisition signal received — holding {profile.PostAcquisitionDelaySeconds:0.##}s grace before revealing.");
+                    await Task.Delay(graceMs, ct);
+                }
+                else
+                {
+                    Log("Acquisition signal received — beginning reveals now.");
+                }
+                phaseOffsetMs = (DateTime.UtcNow - phaseStart).TotalMilliseconds;
+            }
+            else
+            {
+                Log($"WARNING: Acquisition signal did not fire within {SignalTimeoutMs / 1000}s. " +
+                    "Falling back to per-row absolute times. " +
+                    "Tip: for games using Windows GameInput (Forza Horizon, etc.), " +
+                    "uncheck 'Wait until the game opens the first device' and set the per-row times directly.");
+                // phaseOffsetMs stays 0 — Timer-mode semantics for the rest.
+            }
+        }
+
+        // ── Per-device timer loop ───────────────────────────────────────────
         foreach (var dev in profile.DisableThenRestore)
         {
             ct.ThrowIfCancellationRequested();
 
-            double targetAtMs;
-            if (_firstDeviceAcquired && acquisitionHandled)
-            {
-                // Signal already fired and grace applied — pack remaining reveals
-                // back-to-back, paced only by IOCTL latency.
-                targetAtMs = lastRevealAtMs;
-            }
-            else
-            {
-                // Either no signal yet (or we're checking before it arrives), or
-                // signal just fired and we haven't yet applied the grace period.
-                // Default target = max(user T+Xs, previous reveal).
-                targetAtMs = Math.Max(Math.Max(0, dev.DelaySeconds * 1000.0), lastRevealAtMs);
-            }
+            // Target = phase offset (0 in Timer, signal+grace in Acquisition)
+            // + per-row delay, clamped so reveals stay monotonically ordered.
+            var perRowMs   = Math.Max(0, dev.DelaySeconds * 1000.0);
+            var targetAtMs = Math.Max(phaseOffsetMs + perRowMs, lastRevealAtMs);
 
-            // Wait until target — but ALSO wake immediately if acquisition fires
-            // during the wait. Poll _firstDeviceAcquired in a short loop instead
-            // of one big Task.Delay so we can react to the signal without a
-            // CancellationToken-style plumbing through the watcher.
             while (true)
             {
                 ct.ThrowIfCancellationRequested();
-
-                if (_firstDeviceAcquired && !acquisitionHandled)
-                {
-                    // Signal just arrived. Apply the post-acquisition grace once,
-                    // then short-circuit this device + everything after it.
-                    var graceMs = (int)Math.Max(0, profile.PostAcquisitionDelaySeconds * 1000.0);
-                    if (graceMs > 0)
-                    {
-                        Log($"Acquisition signal received — holding {profile.PostAcquisitionDelaySeconds:0.##}s grace before revealing remaining devices.");
-                        await Task.Delay(graceMs, ct);
-                    }
-                    else
-                    {
-                        Log("Acquisition signal received — revealing remaining devices now.");
-                    }
-                    acquisitionHandled = true;
-                    targetAtMs = (DateTime.UtcNow - phaseStart).TotalMilliseconds;
-                    break;
-                }
-
                 var elapsedMs = (DateTime.UtcNow - phaseStart).TotalMilliseconds;
                 var waitMs    = targetAtMs - elapsedMs;
                 if (waitMs <= 0) break;
 
-                // 250ms granularity: short enough to react to the ETW signal
-                // promptly, long enough that we're not busy-looping.
+                // 250ms granularity is fine — we're no longer racing a signal,
+                // just waiting for an absolute timestamp.
                 await Task.Delay(Math.Min(250, (int)waitMs), ct);
             }
 

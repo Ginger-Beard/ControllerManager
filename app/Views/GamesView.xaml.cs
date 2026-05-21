@@ -241,12 +241,19 @@ public partial class GamesView : UserControl
             MessageBoxImage.Warning);
     }
 
-    // Launch the modal timing-test dialog. The dialog drives its own
-    // CalibrationRunner lifecycle; we just need to parent it to the main
-    // window so it positions correctly.
+    // Launch the modal timing-test dialog with the currently-edited profile's
+    // exe path + name. The dialog drives its own CalibrationRunner lifecycle
+    // and launches/terminates the game itself.
     private void RunTimingTest_Click(object sender, RoutedEventArgs e)
     {
-        var dlg = new CalibrationDialog
+        if (DataContext is not GamesViewModel vm || vm.Editor is null) return;
+
+        var exePath  = vm.Editor.ExePath ?? "";
+        var displayName = !string.IsNullOrWhiteSpace(vm.Editor.Name)
+            ? vm.Editor.Name
+            : (System.IO.Path.GetFileNameWithoutExtension(exePath) ?? "the game");
+
+        var dlg = new CalibrationDialog(exePath, displayName)
         {
             Owner = Window.GetWindow(this),
         };

@@ -66,8 +66,10 @@ You need both:
    - **Slim** — smaller, but needs the .NET 10 Desktop Runtime installed.
 
 Run it. You'll get a UAC prompt once on launch (it needs admin to talk to HidHide's
-kernel driver). After that, you're set — toggle **Start with Windows** in Settings
-and it'll be in the tray every time you boot, no further prompts.
+kernel driver). If HidHide isn't installed yet, Controller Manager pops a dialog
+on first launch with a direct link to the Releases page — install it, then restart
+the app. After that, you're set — toggle **Start with Windows** in Settings and
+it'll be in the tray every time you boot, no further prompts.
 
 ---
 
@@ -79,20 +81,26 @@ The classic case.
 
 1. **Games tab → New profile** — name it "Forza Horizon 6", browse to
    `forzahorizon6.exe` (Steam: `...steamapps\common\ForzaHorizon6\forzahorizon6.exe`).
-2. Click **+ Add to profile** for each device you want the game to see — wheel,
-   pedals, shifter, handbrake, button box. **Don't add the gamepad** (or anything
-   else you don't want the game touching — it'll be hidden automatically).
-3. Set roles:
+2. Add each device you want the game to see by clicking **+ Add** (or
+   double-clicking the row) in the device picker at the bottom: wheel,
+   pedals, shifter, handbrake, button box. **Don't add the gamepad** (or
+   anything else you don't want the game touching — it'll be hidden
+   automatically).
+3. Set roles in the device list:
    - Wheel base → **Always Visible**
    - Pedals → **Reveal After Start**
    - Shifter → **Reveal After Start**
    - Handbrake → **Reveal After Start**
-4. Set **Reveal trigger** to **When game opens first device**. (Recommended
-   for FFB games.) Leave **Wait after first device opened** at the 1.5s
-   default for now.
-5. Drag the Reveal-After-Start rows into the order you want them mapped to
-   in-game slots #2, #3, #4. List order = reveal order = in-game order.
-6. **Save Profile**, then launch by one of the methods below.
+4. Check **Wait until the game opens the first device before revealing the
+   rest**. Leave **Wait this many seconds after:** at the 1.5s default.
+5. Set the per-row **Reveal at** times as additional offsets *after* that
+   grace period. Common pattern: pedals=0s, shifter=1s, handbrake=2s.
+   So with grace=1.5s, the pedals reveal 1.5s after the wheel opens, shifter
+   at 2.5s, handbrake at 3.5s — each gets its own slot.
+6. Drag the Reveal After Start rows (☰ handle) into the order you want them
+   mapped to in-game slots #2, #3, #4. List order = reveal order.
+7. Click **▶ Explain this profile** above the device list to verify the
+   launch timeline matches what you expect. Then **Save Profile**.
 
 When FH6 starts, only the wheel is visible. The game does its warmup, opens
 the wheel file when it's ready, and Controller Manager spots that exact moment
@@ -100,28 +108,23 @@ via kernel ETW — then waits 1.5 seconds (your "post-acquisition delay") so the
 game has time to lock the wheel as controller slot #1 before revealing the
 rest.
 
-**Also set per-device "Reveal at" values as a safety net.** Some games (especially
-those using RawInput or WGI) don't open the device file directly, so the ETW
-signal never fires. In that case the "Reveal at" times control timing. Use values
-that would work in Timer mode (for Forza-style: ~11s on the first, 11.1, 11.2
-on the others) — if ETW fires earlier, the reveals just happen sooner. The
-"Reveal at" time is the upper bound, not the target.
-
 > **MOZA tip:** turn on **Forza Compatibility Mode** in Pit House so the wheel
 > presents as a Fanatec (VID `0EB7`). FH6 detects Fanatec directly via its native
 > SDK and routes FFB through it cleanly.
 
-> **If wheel still doesn't get slot #1:** bump **Wait after first device opened**
-> to 2.0 or 2.5 seconds. Some games take longer to commit slot assignment after
-> first noticing a controller. Worst case 3s — beyond that, something else is
-> going wrong and worth filing an issue.
+> **If your wheel still doesn't get slot #1:** bump **Wait this many seconds
+> after:** to 2.0 or 2.5 seconds. Some games take longer to commit slot
+> assignment after first noticing a controller. Worst case 3s — beyond that,
+> something else is going wrong and worth filing an issue.
 
-> **If reveals never happen at all (logs show no acquisition signal):** the
-> game probably uses RawInput or WGI and doesn't call CreateFile on the device
-> file. The per-device "Reveal at" values still control timing in that case —
-> make sure they're set sensibly (e.g. 11s, 11.1s, 11.2s for Forza). The acquisition
-> signal is an early-fire optimization on top of the timer; the timer is the
-> source of truth.
+> **If reveals never happen at all:** the game probably uses Windows'
+> GameInput (Forza Horizon and modern Xbox-style PC games do) — Controller
+> Manager can't see the "game opened the wheel" moment for those titles.
+> After a 60-second timeout, Controller Manager falls back to revealing at
+> absolute times, but by then your game has long since stopped scanning.
+> The fix: **uncheck the "Wait until..." box** for those games, switch to
+> Timer mode, and use the per-row **Reveal at** values as absolute seconds
+> from game launch (e.g. 11.0s, 11.1s, 11.2s for Forza).
 
 #### Forza + lots of peripherals: consolidate with vJoy
 
@@ -203,40 +206,41 @@ Then in Sunshine: **Configuration → Applications → Edit your game**.
 - **Command Preparations → cmd (blocking)** = `"C:\path\to\ControllerManager.exe" --launch <profileId>`
 - **Detach Command** = same, or rely on the process watcher.
 
-You can copy the `--launch` command from the in-app **Copy Steam Command** button
-(strip the `--steam-wrap`/`%command%` parts) or pull it from the shortcut you
-exported.
+The easiest way to get the right `--launch <profileId>` command is to use the
+**Desktop** or **Start Menu** shortcut button in the Games tab — the exported
+`.lnk` has the full command line inside it.
 
 ---
 
 ## How to launch a profile
 
-Once you've got a profile saved, four ways to fire it:
+Once you've got a profile saved, three ways to fire it:
 
 | Method | When to use it | UAC prompt? |
 |---|---|---|
 | **In-app Launch button** (Dashboard) | Testing, manual sessions | No (CM is already running) |
 | **Desktop / Start Menu shortcut** | Most users — set it once, double-click forever | No (uses a scheduled task) |
-| **Steam Launch Options** | Steam-launched games where you want playtime tracked | Currently yes — see below |
-| **Process Watcher** (Settings) | Set-and-forget — works for any launch method | No, but a small race window |
+| **Auto-trigger when game launches** (profile setting) | Set-and-forget — works for any launch method | No, but a small race window |
 
 The **Desktop / Start Menu shortcuts** are the recommended path for most games.
 Click **Desktop** or **Start Menu** in the Games tab to generate one — the
 shortcut targets the game's icon, looks like a normal game shortcut, and is
 UAC-free thanks to a per-profile scheduled task.
 
-The **Process Watcher** polls every 500ms for known game executables and triggers
-the profile automatically when one starts. It catches the game very fast but has a
-narrow race window (~0-500ms) where the game might already be enumerating
-controllers. Slow-starting games like Forza Horizon have 10+ seconds of warmup
-before they scan for controllers, so the watcher wins that race comfortably. For
-games that scan immediately at startup, prefer the shortcut or in-app Launch path.
+**Auto-trigger** lives on each profile as a checkbox: **"Auto-trigger this
+profile when the game launches"**. With it on, Controller Manager polls
+every 500ms for the profile's `.exe` and applies the profile automatically.
+Catches the game fast but has a narrow race window (~0-500ms) where the
+game might already be enumerating controllers. Slow-starting games like
+Forza Horizon have 10+ seconds of warmup before they scan, so the watcher
+wins that race comfortably. For games that scan immediately at startup,
+prefer the shortcut or in-app Launch path.
 
-> **Steam Launch Options note:** the `--steam-wrap` path still triggers UAC on
-> every launch because Steam needs to pass arguments through to the wrapper.
-> A fix is planned (split into a non-admin launcher exe) but isn't shipped yet.
-> If this matters to you, use a Desktop shortcut and launch from there — Steam
-> playtime tracking is lost but everything else works.
+> **Heads-up:** Two profiles can't auto-trigger on the same `.exe`. If you
+> tick the checkbox and another profile is already auto-triggering on the
+> same game, Controller Manager refuses to enable it and tells you which
+> profile already owns that exe — turn it off on the other profile (or
+> point one of them at a different exe) first.
 
 ---
 
@@ -313,23 +317,27 @@ known-broken list.
 - Check that your **wheel base** is set to **Always Visible** in the profile.
 
 **"My wheel ended up as slot #2 (or #3)"**
-- You're in acquisition mode but the game commits slot #1 too slowly for the
-  default grace period. Bump **Wait after first device opened** in the profile
-  editor to 2.0 or 2.5 seconds.
-- If you're in Timer mode, your wheel arrived too close in time to other
-  devices. Spread them out (e.g. wheel always-visible, others starting at T+11s
-  or later) and confirm the wheel is set to **Always Visible** so the game's
-  scan finds it alone.
+- If the "Wait until the game opens the first device" checkbox is on, the
+  game might be committing slot #1 too slowly for the default grace period.
+  Bump **Wait this many seconds after:** in the profile editor to 2.0 or
+  2.5 seconds. (Per-row Reveal At times are *added on top* of this grace —
+  so if you've already set them, bumping grace pushes all reveals back.)
+- If the checkbox is off, your per-row **Reveal at** times are absolute
+  seconds from game launch. Make sure the wheel is **Always Visible** so
+  the game's startup scan finds it alone, and spread the Reveal After Start
+  times out (e.g. 11.0s, 11.1s, 11.2s) so they arrive after the slot #1
+  assignment.
 
 **"The game doesn't see my pedals after they're supposed to reveal"**
 - The game might not support hot-plug detection (see [Honest limit](#the-honest-limit)).
-- In Timer mode, verify the per-device reveal times — if you set everything
-  to T+0s they all appear at once and the game's scan sees them all together,
+- Verify the per-device **Reveal at** times — if you set everything to 0s
+  they all appear at once and the game's scan sees them all together,
   defeating the slot-#1 assignment.
 - The game might have a hard detection cutoff a few seconds after first
   scanning. Tighten the reveal spread (e.g. all devices within 1s of each
-  other) so nothing falls past the cutoff. Acquisition mode handles this
-  automatically since reveals fire back-to-back.
+  other) so nothing falls past the cutoff. The "Wait until first device"
+  checkbox handles this automatically since reveals fire back-to-back once
+  the signal lands.
 
 **"Some devices weren't hidden — the game saw them anyway"**
 - Make sure the device appears in the Games-tab device picker (in the row
@@ -353,6 +361,13 @@ known-broken list.
 - The Windows driver hasn't registered a friendly name for it. The VID:PID tooltip
   still works — use that to identify it. (PRs welcome to expand the brand table
   in this README.)
+
+**Filing an issue / collecting diagnostic logs**
+- In **Settings → Logging**, set the level to **Verbose** (or **Debug** for
+  HID-class details if I ask for it). Reproduce the issue, then attach
+  `%LOCALAPPDATA%\ControllerManager\log.txt` to your issue. Debug-level logs
+  include per-device kernel HIDCLASS events which are firehose-chatty — only
+  use that level for short test sessions.
 
 ---
 
@@ -384,9 +399,9 @@ GitHub: [Ginger-Beard/ControllerManager](https://github.com/Ginger-Beard/Control
 ## Credits
 
 Controller Manager is built on top of **[HidHide](https://github.com/nefarius/HidHide)**
-by [Nefarius (Benjamin Höglinger-Stelzer)](https://github.com/nefarius) —
+by [Nefarius](https://github.com/nefarius) and the many other contributors —
 a signed, MIT-licensed kernel filter driver that does the actual device hiding.
-Without his work none of this would be possible. Huge thanks for the tireless
+Without their work none of this would be possible. Huge thanks for the tireless
 work maintaining and improving it.
 
 - Maintained by [Ginger-Beard](https://github.com/Ginger-Beard).

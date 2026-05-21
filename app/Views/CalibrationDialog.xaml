@@ -5,7 +5,8 @@
         Width="720" Height="520"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
-        ResizeMode="CanResize">
+        ResizeMode="CanResize"
+        Topmost="True">
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -17,19 +18,19 @@
         <StackPanel Grid.Row="0" Margin="0,0,0,12">
             <TextBlock x:Name="HeadlineText"
                        FontSize="16" FontWeight="SemiBold"
-                       Text="Measuring device activity..."
+                       Text="Measure which devices your game uses"
                        Margin="0,0,0,6"/>
             <TextBlock x:Name="BodyText"
                        TextWrapping="Wrap"
                        Foreground="#555"
-                       Text="1. Make sure all your devices are plugged in. (No need to change Controller Manager's profile.)&#x0a;2. Launch your game and let it scan controllers.&#x0a;3. Play for 15–30 seconds — drive a bit, push the wheel, press a few buttons.&#x0a;4. Click 'Stop and show results' below.&#x0a;&#x0a;Controller Manager will compare a 'before' and 'after' snapshot of which devices the system is actively reading. The devices with the biggest jump are the ones your game was using."/>
+                       Text="1. Make sure the game is NOT running yet (close it if it is).&#x0a;2. Click Start game. Controller Manager captures a baseline, then launches the game for you (no hiding applied).&#x0a;3. Let it run for 30+ seconds — through the publisher splash, intros, into a menu. You don't need to do anything in-game.&#x0a;4. Click Stop. Controller Manager closes the game, captures a final snapshot, and shows which devices saw the most activity.&#x0a;&#x0a;Tip: most games claim controllers during the startup animations, well before you reach a menu. Just letting the game finish loading is usually enough."/>
         </StackPanel>
 
         <!-- ── Results panel (hidden until stop) ─────────────────────── -->
         <Border Grid.Row="1" BorderBrush="#CCC" BorderThickness="1">
             <Grid>
                 <TextBlock x:Name="WaitingText"
-                           Text="Waiting — the baseline snapshot is captured. Click Stop when you've finished playing."
+                           Text="Click Start when your game is not running."
                            Margin="12" Foreground="#888" FontStyle="Italic"
                            VerticalAlignment="Top"/>
 
@@ -71,7 +72,14 @@
                     DockPanel.Dock="Right"
                     Content="Stop and show results"
                     Padding="14,4"
+                    Visibility="Collapsed"
                     Click="StopButton_Click"/>
+            <Button x:Name="StartButton"
+                    DockPanel.Dock="Right"
+                    Content="Start game"
+                    Padding="14,4"
+                    Background="#3CB371" Foreground="White"
+                    Click="StartButton_Click"/>
             <TextBlock x:Name="StatusText"
                        VerticalAlignment="Center"
                        Foreground="#888"
