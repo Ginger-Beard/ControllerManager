@@ -30,7 +30,7 @@ actually unplugging anything.
 
 ---
 
-## How it works in plain language
+## How it works
 
 Every game profile is a short list of your devices, each tagged one of two ways:
 
