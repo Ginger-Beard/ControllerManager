@@ -390,7 +390,6 @@ GitHub: [Ginger-Beard/ControllerManager](https://github.com/Ginger-Beard/Control
   /ViewModels        — Dashboard, Games, Devices, Settings, Input Monitor
   /Views             — XAML
   /Models            — Profile, HidDevice, AppSettings
-/HidHide             — Reference HidHide source (forked from nefarius/HidHide)
 /tools/DeviceWatcher — Companion CLI for testing hide/show behavior
 ```
 
