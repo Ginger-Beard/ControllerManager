@@ -12,13 +12,20 @@ changes, both files need a sweep.
 ## What the app is
 
 A per-game HID device profile manager for sim racing and controller games. Each
-profile is an ordered list of devices, each assigned one of three roles:
+profile is an ordered list of devices, each assigned one of two roles in the
+current UI:
 
 - **Always Visible** — the game sees this from launch.
-- **Reveal After Start** — hidden at launch, revealed at a configured absolute
-  T+X seconds after the game process starts. List order is the reveal order;
-  whichever device is revealed first claims the next available controller slot.
-- **Always Hidden** — never visible to this game.
+- **Reveal After Start** — hidden at launch, revealed at a configured time
+  after the game process starts (semantics depend on whether the
+  "Wait until the game opens the first device" checkbox is on — see
+  "Reveal phase triggers" below). List order is the reveal order; whichever
+  device is revealed first claims the next available controller slot.
+
+A third role, **Always Hidden**, still exists in the data model (`KeepDisabled`
+in JSON) for backwards compatibility with older profiles, but the UI no longer
+offers it as a choice — assigning a device "Always Hidden" had the same effect
+as leaving it out of the profile entirely, so the dropdown was simplified.
 
 Devices not in the profile are hidden from the game for the duration of the
 session. Other processes (companion apps, dashboards, etc.) keep full access
@@ -45,31 +52,37 @@ process for that exact pattern — confirmed via FH6 terminating CM externally
 ~60s into a session with no .NET exception logged. Not fixable in user space;
 the DuplicateHandle loop **is** the cheat signature.
 
-Two reveal triggers, configurable per profile (`Profile.AcquisitionTrigger`).
-Both honor per-device `DeviceRef.DelaySeconds` (absolute `T+Xs` from reveal
-phase start, double precision); they differ in how they treat the optional
-ETW acquisition signal.
+Two reveal triggers, configurable per profile (`Profile.AcquisitionTrigger`)
+and exposed in the UI as a single checkbox: "Wait until the game opens the
+first device before revealing the rest". The two modes give `DelaySeconds`
+**different semantics** — that's intentional and the UI tooltip + "Explain
+this profile" panel both spell it out.
 
-1. **Timer mode** (default): per-device `T+Xs` is strict. Each Reveal-After-
-   Start device fires at its configured time, clamped monotonically (if a
-   later device has a smaller time, it fires immediately after the previous).
-   Default for a new Reveal-After-Start device is 5s.
+1. **Timer mode** (checkbox OFF, default): per-device `DelaySeconds` is an
+   **absolute** time from when the reveal phase starts (effectively "seconds
+   after game launch + hide setup"). Each Reveal-After-Start device fires at
+   its configured time, clamped monotonically against `lastRevealAtMs` so
+   list order is preserved even if the user types non-monotonic values.
+   Default for the first Reveal-After-Start device added to a profile is 5s.
 
-2. **FirstDeviceOpened mode**: kernel ETW (`Microsoft-Windows-Kernel-File`)
-   watches for the game's PID opening one of the profile's Always-Visible
-   device files, concurrent with the reveal loop. The user's per-device T+Xs
-   are still the primary timing — if the signal never fires (game uses
-   RawInput/WGI/GameInputService and never calls CreateFile on the device
-   file directly), reveals still happen at the configured times.
-   If the signal does fire, the orchestrator short-circuits the current
-   wait, applies `Profile.PostAcquisitionDelaySeconds` (default 1.5s — see
-   "Slot-commit grace period" below) once, then packs all remaining
-   reveals back-to-back paced only by IOCTL latency.
+2. **Acquisition mode** (checkbox ON): `RevealDisableThenRestore` runs in
+   two phases. (a) Wait for the ETW signal upfront, up to 60s. (b) Apply the
+   `Profile.PostAcquisitionDelaySeconds` grace period (default 1.5s).
+   Record the moment grace ends as `phaseOffsetMs`. Then run the per-device
+   loop with each device firing at `phaseOffsetMs + DelaySeconds * 1000`. So
+   `DelaySeconds` becomes an **additive offset** on top of the grace —
+   setting all rows to 0 makes them fire back-to-back at grace; staggering
+   (e.g. 0, 1, 2) spreads them out for slot ordering.
 
-The acquisition signal is an early-fire optimization, not a gate. This means
-acquisition-mode profiles must still have reasonable per-device T+Xs values
-— they act as the safety net upper bound. The UI shows the T+Xs field in
-both modes for this reason.
+**60-second fallback.** If the signal never fires in acquisition mode
+(typical for Forza Horizon and other WGI titles where `GameInputSvc`
+pre-opens device handles at boot — see "FirstDeviceAcquisitionWatcher"
+below), the orchestrator gives up after 60s, logs a clear warning telling
+the user to uncheck the box, and proceeds with `phaseOffsetMs = 0`. The
+per-row times then act as absolute Timer-mode values for that session
+(best-effort recovery so devices still reveal at all). 60s is far longer
+than any game's controller-scan window, so this is genuinely a fallback,
+not a primary path.
 
 ETW is EAC-safe: it's one-way kernel telemetry, the consumer never touches
 the source process. Anti-cheats use ETW themselves; it's not a cheat vector.
@@ -87,10 +100,11 @@ others at T+11s = pedals/handbrake got slot #1. Revealing at T+12s = wheel
 got slot #1. So roughly 1.5s of "Always-Visible device alone" is required
 before adding new devices.
 
-`Profile.PostAcquisitionDelaySeconds` (default 1.5s) is exposed in the UI
-under the acquisition-trigger dropdown when FirstDeviceOpened is selected.
-In Timer mode the same effect is achieved by spacing the user-configured
-T+Xs values themselves.
+`Profile.PostAcquisitionDelaySeconds` (default 1.5s) surfaces in the UI as
+the "Wait this many seconds after:" field, indented under the
+"Wait until the game opens the first device" checkbox (visible only when
+the checkbox is on). In Timer mode the same effect is achieved by spacing
+the user-configured per-row times themselves.
 
 ### FirstDeviceAcquisitionWatcher path matching
 The watcher subscribes to `Microsoft-Windows-Kernel-File` via the TraceEvent
@@ -146,8 +160,10 @@ unknown brokers discoverable: if a future game uses some other broker we
 haven't named, the verbose log will show its name on the watched-path open.
 
 ETW session name is `ControllerManager_DeviceAcquisition`; stale sessions
-from prior crashes are stopped at Start. 30s timeout falls back to Timer
-mode if no matching open is observed.
+from prior crashes are stopped at Start. The watcher itself has no timeout
+— it runs until `Stop()` is called by the orchestrator. The 60-second
+signal-or-fallback timeout lives in `RevealDisableThenRestore` (see
+"Reveal phase triggers" above).
 
 ### Forza multi-device flakiness (engine limitation)
 Forza Horizon's engine handles small numbers of HID gaming devices (wheel +
@@ -221,16 +237,17 @@ this filter doesn't require re-opening HID descriptors at session start.
 
 ### Four supported use cases (settled)
 1. **Forza Horizon / Xbox sim racing** — wheel = AlwaysVisible,
-   pedals/shifter = RevealAfterStart at staggered T+Xs times,
-   gamepad = AlwaysHidden.
+   pedals/shifter = RevealAfterStart at staggered times, gamepad not added
+   to the profile (so it's hidden from the game by default).
 2. **Sim racing companion apps** (SimHub, Pit House, GHub, Synapse) —
    automatically retain device access via HidHide inverse-whitelist mode (only
    the game's exe is in the deny list during a session). No user config.
-3. **Other PC games with controllers** — gamepad = AlwaysVisible, sim rig =
-   AlwaysHidden. No RevealAfterStart entries; orchestrator skips wait+reveal.
+3. **Other PC games with controllers** — gamepad = AlwaysVisible, sim rig
+   not added to the profile. No RevealAfterStart entries; orchestrator
+   skips wait+reveal.
 4. **Sunshine / Apollo streaming** — virtual gamepad = AlwaysVisible (build the
    profile while a remote session is active so the dynamic device appears in
-   the picker), everything else = AlwaysHidden.
+   the picker), physical controllers not added.
 
 ---
 
@@ -268,16 +285,29 @@ need explicit user approval and a doc update.
 - One ordered device list per profile. Drag handle (`☰`) to reorder; arrows
   for keyboard-accessible one-step moves. Drag has a ghost adorner and a green
   insertion line.
-- Per-row role selector (Always Visible / Reveal After Start / Always Hidden)
-  + per-row T+Xs field (only meaningful for Reveal After Start AND only in
-  Timer trigger mode — hidden in FirstDeviceOpened mode where times are
-  ignored) + per-row Remove.
-- First Reveal-After-Start device added auto-defaults to T+5s; users can edit.
-- "Reveal trigger" dropdown selects Timer (default) or FirstDeviceOpened.
-- "Wait after first device opened" field appears in FirstDeviceOpened mode
-  only — drives `PostAcquisitionDelaySeconds`, default 1.5s.
+- Per-row role selector — current options are **Always Visible** and
+  **Reveal After Start**. The data model retains `AlwaysHidden` (and JSON
+  `keepDisabled`) for backward compatibility, but the dropdown no longer
+  offers it because absent-from-profile already means hidden.
+- Per-row "Reveal at" field (formerly labeled T+Xs) — visible only for
+  **Reveal After Start** rows. Semantics depend on the
+  "Wait until first device" checkbox:
+  - Checkbox OFF: absolute seconds from reveal-phase start.
+  - Checkbox ON: additive offset on top of the grace period (so vJoy at 5s
+    + grace 1.5s = vJoy reveals 6.5s after the game opens the wheel).
+  - Tooltip on the field spells both semantics out.
+- First Reveal-After-Start device added auto-defaults to 5s; users can edit.
+- "Wait until the game opens the first device before revealing the rest"
+  checkbox drives `Profile.AcquisitionTrigger` (Timer ↔ FirstDeviceOpened).
+- "Wait this many seconds after:" field appears indented under that
+  checkbox when it's on — drives `PostAcquisitionDelaySeconds`, default 1.5s.
+- "▶ Explain this profile" collapsible expander above the device list shows
+  a live, structured timeline of what will happen at launch (sections with
+  device chips). Collapsed by default; scrollable internally (MaxHeight 220)
+  so opening it can't push action buttons off-screen.
 - "Auto-trigger this profile when the game launches" checkbox drives
-  `ProcessWatcherEnabled`.
+  `ProcessWatcherEnabled`. Click-handler refuses to enable if another profile
+  is already auto-triggering on the same exe (and explains why in a modal).
 - Save Profile button explicit. "Unsaved changes" indicator visible.
 - Delete Profile requires confirmation. Per-profile scheduled task created by
   `ShortcutExporter` is cleaned up on delete via `LaunchTaskManager`.
@@ -304,8 +334,11 @@ need explicit user approval and a doc update.
   matter for FFB-sensitive games. Per-profile gate via
   `Profile.ProcessWatcherEnabled`; service always runs (no global toggle in
   Settings).
-- **Steam Launch Options (`--steam-wrap`)** — currently UAC-prompts on every
-  launch. See "Open work — Steam launch UAC" below.
+- **Steam Launch Options (`--steam-wrap`)** — IPC handler and CLI invocation
+  path still exist, but the "Copy Steam Command" button in the Games tab is
+  currently `Visibility="Collapsed"` because the launch path UAC-prompts on
+  every launch. Re-enable when the launcher-binary split lands. See
+  "Open work — Steam launch UAC" below.
 
 ### Launch behavior
 - When launched at boot via the Start-with-Windows scheduled task (argument
@@ -330,15 +363,21 @@ need explicit user approval and a doc update.
 | GET/SET_ACTIVE    | 0x80016010 / 14 | BOOLEAN |
 | GET/SET_WLINVERSE | 0x80016018 / 1C | BOOLEAN; true = whitelist acts as deny-list |
 
-Session blacklist IOCTLs (`0x80016020/24`) are documented in `HidHide/` but
-NOT in the stock signed driver — see HidHide driver compatibility above.
+Session blacklist IOCTLs (`0x80016020/24`) existed only in an abandoned
+fork of HidHide; they're NOT in the stock signed driver — see HidHide
+driver compatibility above. We don't call them.
 
 ### Profile schema versions
-| Version | Semantics of `DeviceRef.DelaySeconds` |
+| Version | Stored meaning of `DeviceRef.DelaySeconds` |
 |---|---|
 | 0 (legacy) | `Profile.InitialDelaySeconds` + per-device "wait AFTER reveal" (int seconds) |
 | 1 | per-device "wait BEFORE reveal" (relative) |
-| 2 (current) | per-device absolute "reveal at T+X seconds from game launch" (double, sub-second precision) |
+| 2 (current) | per-device double, sub-second precision |
+
+In v2 the stored value's *runtime* interpretation depends on
+`Profile.AcquisitionTrigger`: absolute seconds from reveal-phase start
+(Timer mode), or additive offset on top of the post-acquisition grace
+(Acquisition mode). See "Reveal phase triggers" for the math.
 
 `ProfileEditorViewModel.LoadProfile` migrates v0 and v1 to v2 on read.
 `ToProfile` always writes v2.
@@ -569,10 +608,11 @@ be hard to catch without automation. High-value areas to test first:
   three cases have known input/output pairs from real profiles, easy to
   pin in tests.
 - **Orchestrator reveal timing math**: target time clamping
-  (`max(configured, lastRevealAtMs)`), absolute T+Xs semantics, sub-second
-  precision. Don't need to mock HidHide — extract pure timing logic into
-  a helper that returns `(deviceId, targetMs)` pairs given a profile +
-  acquisition state. Test that.
+  (`max(phaseOffsetMs + perRowMs, lastRevealAtMs)`), absolute Timer-mode
+  semantics, additive Acquisition-mode semantics, sub-second precision.
+  Don't need to mock HidHide — extract the pure timing logic into a
+  helper that returns `(deviceId, targetMs)` pairs given a profile +
+  acquisition-fired state. Test that.
 - **HidDevice ChildInstanceIds expansion**
   (`LaunchOrchestrator.ExpandToChildren`): given a list of primary IDs +
   a device list with sibling children, returns all child IDs. Pure
@@ -583,9 +623,13 @@ be hard to catch without automation. High-value areas to test first:
   delegate.
 - **NT path resolution in `FirstDeviceAcquisitionWatcher`**: skip — needs
   a real device handle.
-- **AcquisitionTrigger flow in orchestrator**: refactor `WaitForFirstDeviceOpen`
-  so the ETW watcher is injected (interface), then test the timer-fallback
-  and grace-period logic without ETW.
+- **Acquisition-mode wait + 60s fallback** in `RevealDisableThenRestore`:
+  refactor the signal-wait so a fake `IAcquisitionSignal` can be injected
+  (vs the live `FirstDeviceAcquisitionWatcher`). Then test:
+  (1) signal fires fast → phaseOffsetMs = signal_arrival_ms + graceMs;
+  (2) signal never fires within 60s → warning logged, phaseOffsetMs stays 0
+  (Timer-mode fallback);
+  (3) cancellation during the wait propagates cleanly.
 
 Recommended setup: separate `app/Tests/ControllerManager.Tests.csproj`
 using xUnit + FluentAssertions. Most of the testable logic is already in
@@ -707,15 +751,21 @@ first run.
 
 ## Testing checklist (no code; before each release)
 
-- **FH6 end-to-end (Timer mode)**: confirm no EAC crash; FFB on the wheel;
-  pedals/shifter reveal in order at the configured T+Xs times.
-- **FH6 end-to-end (FirstDeviceOpened mode)**: same setup but with the
-  acquisition trigger set. Wheel = Always Visible; others = Reveal After
-  Start. Confirm log shows `[Acquisition] Game opened watched device:`
-  followed by reveals 1.5s later. Wheel ends up at slot #1, others queue
-  behind in profile order.
-- **Slot-commit grace tuning**: if wheel still loses slot #1 in FH6, bump
-  `Wait after first device opened` toward 2-3s. Document the working value
+- **FH6 end-to-end (checkbox OFF — Timer mode)**: confirm no EAC crash;
+  FFB on the wheel; pedals/shifter reveal in order at the configured
+  per-row times.
+- **FH6 end-to-end (checkbox ON — Acquisition mode)**: same setup but with
+  "Wait until the game opens the first device" checked. Wheel = Always
+  Visible; others = Reveal After Start. Confirm log shows
+  `[Acquisition] Signal fired by '<wheel>' at +X.XXXs` followed by
+  `Acquisition signal received — holding 1.5s grace before revealing.`
+  then the reveals at their additive offsets. Wheel ends up at slot #1.
+- **Acquisition fallback** (Forza-class WGI title): same setup but the
+  game uses `GameInputSvc` — confirm log shows `WARNING: Acquisition signal
+  did not fire within 60s` and that the per-row times then act as absolute
+  Timer-mode values for that session.
+- **Slot-commit grace tuning**: if wheel still loses slot #1, bump
+  `Wait this many seconds after:` toward 2-3s. Document the working value
   per game.
 - **Broad hide list**: confirm Logger output during `BeginGameSession`
   includes off-spec sim devices (SIMAGIC handbrake, etc.) in the hide list.

@@ -92,7 +92,6 @@ public sealed class LaunchOrchestrator : IDisposable
     {
         ActiveProfile             = profile;
         _firstDeviceAcquired      = false;
-        _firstDeviceAcquiredAtMs  = 0;
         Logger.Write($"[Orchestrator] RunFlow — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.AcquisitionTrigger}");
 
         FirstDeviceAcquisitionWatcher? watcher = null;
@@ -111,23 +110,23 @@ public sealed class LaunchOrchestrator : IDisposable
             // anti-cheat-protected processes unnecessarily.
             _hidHide.UpdateSessionGameNtPath(gameProc.Id);
 
-            // In acquisition mode, start the ETW watcher *concurrent* with the reveal
-            // phase. The watcher signal short-circuits the per-device T+Xs waits when
-            // it fires. If the signal never fires (game uses RawInput/WGI, no file
-            // open observable), the reveal phase still proceeds using the user's
-            // per-device T+Xs as the safety net — that's why those fields are kept
-            // in the UI in both modes.
+            // In acquisition mode, start the ETW watcher before the reveal phase.
+            // RevealDisableThenRestore waits for the watcher's signal (up to 60s)
+            // and then applies the post-acquisition grace before any per-device
+            // timer fires. If the signal never arrives, the orchestrator falls
+            // back to treating per-row times as absolute Timer-mode values for
+            // that session (see RevealDisableThenRestore comment).
             if (profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened
                 && profile.DisableThenRestore.Count > 0)
             {
                 watcher = StartAcquisitionWatcher(profile, gameProc.Id);
             }
-            else if (Logger.CurrentLevel == LogLevel.Verbose)
+            else if (Logger.CurrentLevel >= LogLevel.Verbose)
             {
-                // Pure observation: when verbose logging is on, attach the
-                // watcher to every HID device so the user can see exactly when
-                // the game opens each one. Useful for the auto-detect-timing
-                // calibration use case (see DEVELOPMENT.md → Phase 0).
+                // Pure observation when verbose+ logging is on: attach a watcher
+                // to every HID device so the log shows exactly when (and by which
+                // process) each one is opened. Doesn't drive any orchestrator
+                // decisions; the signal fires harmlessly.
                 watcher = StartDiagnosticWatcher(gameProc.Id);
             }
 
@@ -271,21 +270,23 @@ public sealed class LaunchOrchestrator : IDisposable
         throw new TimeoutException($"'{procName}.exe' did not start within 60 seconds.");
     }
 
-    // ── Acquisition watcher (optional, runs concurrent with reveal phase) ───────
+    // ── Acquisition watcher (optional, drives the wait phase in acquisition mode) ───
 
-    private bool   _firstDeviceAcquired;
-    private double _firstDeviceAcquiredAtMs;   // ms since reveal phase started
+    private bool _firstDeviceAcquired;
 
     /// <summary>
     /// Starts the ETW watcher and returns it. The watcher fires
     /// <see cref="FirstDeviceAcquisitionWatcher.Acquired"/> when the game's PID
-    /// opens any HID device file matching one of the profile's Always-Visible
-    /// devices. The reveal loop short-circuits its per-device T+Xs wait when
-    /// the signal arrives.
+    /// (or a named broker process — e.g. GameInputSvc for WGI titles) opens any
+    /// HID device file matching one of the profile's Always-Visible devices.
+    /// In acquisition mode, <c>RevealDisableThenRestore</c> blocks until the
+    /// signal fires (up to 60s) and then applies the post-acquisition grace
+    /// before per-device reveals begin.
     ///
     /// Returns null when the watcher can't be started (no resolvable Always-
     /// Visible paths, ETW session creation failed, etc.) — the reveal phase
-    /// then operates as pure Timer mode using the user's per-device T+Xs.
+    /// then falls back to Timer-mode semantics, treating per-row times as
+    /// absolute seconds from reveal-phase start.
     /// </summary>
     private FirstDeviceAcquisitionWatcher? StartAcquisitionWatcher(Profile profile, int gamePid)
     {
@@ -314,18 +315,7 @@ public sealed class LaunchOrchestrator : IDisposable
         }
 
         var watcher = new FirstDeviceAcquisitionWatcher();
-
-        // Capture the moment of the signal. The reveal loop tracks
-        // _firstDeviceAcquiredAtMs relative to its own phaseStart, so we record
-        // wall-clock ticks here and let the reveal loop convert.
-        var startTicks = DateTime.UtcNow.Ticks;
-        watcher.Acquired += () =>
-        {
-            var elapsedMs = (DateTime.UtcNow.Ticks - startTicks) / TimeSpan.TicksPerMillisecond;
-            _firstDeviceAcquiredAtMs = elapsedMs;
-            _firstDeviceAcquired     = true;
-            Logger.Write($"[Acquisition] Signal fired at watcher-start + {elapsedMs}ms");
-        };
+        watcher.Acquired += () => _firstDeviceAcquired = true;
 
         // Modern Xbox/UWP titles open HID files via a system broker rather
         // than from the game's own process. Two confirmed broker binaries:
