@@ -181,12 +181,14 @@ process at all.
 
 ### HidHide driver compatibility — 1.4.181.0
 The stock signed driver doesn't ship the session-blacklist IOCTLs
-(`0x80016020/24`); those exist only in the modified source under `HidHide/` in
-this repo. We work around by snapshot-and-restore of the persistent blacklist
+(`0x80016020/24`) — those existed only in a modified `HidHide/` fork that's
+no longer carried in this repo (the experiment to ship a custom driver was
+abandoned in favour of working with the signed stock build). We work around
+the missing IOCTLs by snapshot-and-restore of the persistent blacklist
 around each session — see `HidHideClient.BeginGameSession` /
-`UpdateSessionBlacklist` / `EndGameSession`. If CM crashes mid-session, session
-devices remain in the persistent BL until the user re-enables them in the
-Devices tab.
+`UpdateSessionBlacklist` / `EndGameSession`. If CM crashes mid-session,
+session devices remain in the persistent BL until the user re-enables them
+in the Devices tab.
 
 ### Composite HID grouping
 Devices that expose multiple HID interfaces (composite MI_NN children) share a
@@ -589,6 +591,106 @@ Recommended setup: separate `app/Tests/ControllerManager.Tests.csproj`
 using xUnit + FluentAssertions. Most of the testable logic is already in
 pure-ish helpers; the orchestrator may need a small refactor to extract
 timing from I/O.
+
+### Automated end-to-end tests via DeviceWatcher
+
+Unit tests above cover pure logic in isolation, but most regressions worth
+catching are timing- and state-machine-heavy: did the right device end up
+hidden at the right millisecond, did the reveal phase fire in the right
+order, did the persistent blacklist get restored correctly on session end.
+Mocking HidHide + PnP for these is high effort and high risk of testing
+the mock instead of the system.
+
+The `tools/DeviceWatcher/DeviceWatcher.exe` CLI is well-suited to be the
+test harness because it already enumerates HID devices using the same APIs
+as the Devices tab and reports per-device visibility state every 500ms
+(`● OPEN` / `○ HIDDEN` / `- DISABLED` / `? UNKNOWN`). Point a CM profile at
+DeviceWatcher.exe as the "game executable" and you get an observer that
+reports exactly what HidHide is doing to each device, in real time, on real
+Windows, against real hardware.
+
+**Test shape.** A typical end-to-end case:
+
+1. Test harness (xUnit) constructs a temporary `Profile` JSON pointing at
+   `DeviceWatcher.exe` as the game exe, with a known set of `KeepEnabled` /
+   `DisableThenRestore` / `KeepDisabled` entries against real HID instance
+   IDs enumerated from the test machine.
+2. Harness spawns DeviceWatcher.exe with stdout piped (probably with a
+   `--json` mode added — see below) and parses the per-tick visibility
+   updates into a timestamped event stream.
+3. Harness invokes `LaunchOrchestrator.RunFlow(profile, ...)` against a
+   live `HidHideClient` / `DeviceEnumerator` (no mocks).
+4. Orchestrator hides + reveals devices on its normal schedule;
+   DeviceWatcher logs each state transition with relative timestamps.
+5. Harness asserts on the stream: each expected device transitioned
+   `OPEN → HIDDEN` within the hide phase, then `HIDDEN → OPEN` at the
+   expected reveal time, in the expected order.
+6. Test cleanup: kill DeviceWatcher (which triggers orchestrator's
+   `EndGameSession` and BL restore), then verify via fresh enumeration
+   that the persistent blacklist is back to baseline.
+
+**What this catches that unit tests can't:**
+
+- Real HidHide IOCTL behavior (incl. driver-version quirks, session BL
+  snapshot/restore correctness).
+- Real PnP enumeration including composite-HID ContainerId grouping.
+- ETW acquisition timing against an actual file-open event (DeviceWatcher
+  calls `CreateFile` on each device every poll, which fires the signal).
+- Cross-process interactions: WM_DEVICECHANGE broadcasts, hot-plug
+  reactions while a session is live.
+- Reveal-phase additive math under acquisition mode end-to-end.
+- BL restoration after orchestrator crash mid-session (kill -9 the
+  orchestrator and verify cleanup runs).
+
+**Required work (in rough order):**
+
+1. **`--json` output mode on DeviceWatcher.** Currently it prints
+   human-friendly lines; xUnit needs a deterministic, parseable stream.
+   `{"t": 1234, "device": "VID_xxx&PID_yyy", "state": "HIDDEN"}` per
+   transition, one JSON object per line, flush after each write.
+2. **Test-bed fixture.** Helper that records the current persistent BL
+   before each test and restores it after, so a failed test never leaves
+   the user's machine in a weird state. Class fixture in xUnit terms.
+3. **Profile factory.** Builder that takes 2-3 real HID InstanceIds from
+   the test machine + role assignments and produces a `Profile` instance
+   ready to feed the orchestrator. Wraps the v2 schema rather than
+   re-implementing it.
+4. **Stream-assertion helpers.** `WithinMilliseconds(N)`,
+   `InOrder(deviceA, deviceB, deviceC)`, `NeverVisible(device)`,
+   `StateAt(t, device, expectedState)`. Make the assertions read like the
+   profile they verify.
+5. **First case to pin.** "Wheel always visible, pedals reveal at T+5s,
+   shifter at T+6s" — verify pedals transition HIDDEN→OPEN within ±250ms
+   of T+5s and shifter within ±250ms of T+6s, with neither flipping in
+   between. Simplest scenario that exercises the entire reveal loop.
+
+**Limitations and caveats:**
+
+- **Needs real hardware.** No good way to run this in CI without a test
+  rig. Either keep it as a dev-machine-only `[Trait("category", "e2e")]`
+  filter or wire up a self-hosted runner on a known sim rig.
+- **Needs admin.** Same UAC as the app itself; the test process or its
+  runner needs elevation.
+- **Order-of-magnitude slower than unit tests.** Each case takes 10-30
+  seconds of real wall time (the orchestrator's reveal phase happens at
+  real game-launch speed). Reserve for high-value scenarios, not
+  per-commit smoke runs.
+- **Test isolation is delicate.** A test that crashes mid-session can
+  leave devices in the persistent BL. The fixture's restore step must
+  run even on hard failure — xUnit `IAsyncLifetime.DisposeAsync`,
+  cleanup catch blocks, the works.
+
+**Why this is high-leverage:**
+
+- One mechanism covers HidHide IOCTL correctness, orchestrator timing,
+  PnP enumeration, ETW, and BL restoration — every layer that's hard to
+  unit-test individually.
+- DeviceWatcher already exists and is already trusted (it's what we use
+  manually during development); making it test-driveable is mostly
+  output-formatting work, not new code.
+- Regressions in any of the above are exactly the kind of bug users hit
+  during actual gameplay — unit tests for the math don't catch
+  "HidHide silently failed to commit the BL on driver version X."
 
 ### Real icon
 `app/app.ico` is a placeholder. Replace with a real multi-size icon (16 / 32 /

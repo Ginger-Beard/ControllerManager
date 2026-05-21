@@ -386,10 +386,13 @@ GitHub: [Ginger-Beard/ControllerManager](https://github.com/Ginger-Beard/Control
 
 ```
 /app                 — WPF app (.NET 10, MVVM)
-  /Services          — HidHide client, device enumeration, orchestrator
+  /Services          — HidHide IOCTL wrapper, device enumeration, launch orchestrator,
+                       process/file watchers, profile store, calibration runner, tray
   /ViewModels        — Dashboard, Games, Devices, Settings, Input Monitor
   /Views             — XAML
   /Models            — Profile, HidDevice, AppSettings
+  /Native            — P/Invoke shims (HidApi, NtDll, SetupApi)
+  /Cli               — Launch invocation entry points (--launch, --steam-wrap)
 /tools/DeviceWatcher — Companion CLI for testing hide/show behavior
 ```
 
