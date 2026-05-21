@@ -47,7 +47,7 @@ jobs:
             publish-sc/ControllerManager.exe
             publish-fd/ControllerManager-slim.exe
           generate_release_notes: true
-          overwrite: true
+          overwrite_files: true
           body: |
             ## Downloads
 
