@@ -231,7 +231,10 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
         if (string.IsNullOrEmpty(path)) return;
 
         var monitor = new HidInputMonitor();
-        if (!monitor.Open(path)) { monitor.Dispose(); return; }
+        bool opened;
+        try { opened = monitor.Open(path); }
+        catch { monitor.Dispose(); throw; }
+        if (!opened) { monitor.Dispose(); return; }
 
         Axes.Clear();
         Buttons.Clear();

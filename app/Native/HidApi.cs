@@ -19,7 +19,7 @@ internal static class HidApi
     public const uint FILE_SHARE_READ   = 0x00000001;
     public const uint FILE_SHARE_WRITE  = 0x00000002;
     public const uint OPEN_EXISTING     = 3;
-    public const int  HIDP_STATUS_SUCCESS = unchecked((int)0x00110000);
+    public const int  HIDP_STATUS_SUCCESS = 0x00110000;
 
     public const ushort HID_USAGE_PAGE_GENERIC = 0x01;
     public const ushort HID_USAGE_PAGE_BUTTON  = 0x09;

@@ -71,7 +71,7 @@ public sealed class HidHideClient
         IntPtr hWnd, uint Msg, UIntPtr wParam, IntPtr lParam,
         uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
 
-    private const int  HWND_BROADCAST       = unchecked((int)0xFFFF);
+    private const int  HWND_BROADCAST       = 0xFFFF;
     private const uint WM_DEVICECHANGE      = 0x0219;
     private const uint DBT_DEVNODES_CHANGED = 0x0007;
     private const uint SMTO_ABORTIFHUNG     = 0x0002;
@@ -410,7 +410,7 @@ public sealed class HidHideClient
 
     private static byte[] EncodeMultiString(IEnumerable<string> strings)
     {
-        var ms = new System.IO.MemoryStream();
+        using var ms = new System.IO.MemoryStream();
         foreach (var s in strings)
         {
             ms.Write(Encoding.Unicode.GetBytes(s));

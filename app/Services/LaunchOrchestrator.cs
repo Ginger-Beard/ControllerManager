@@ -339,7 +339,10 @@ public sealed class LaunchOrchestrator : IDisposable
         // no broker needed.
         var brokerProcessNames = new[] { "GameInputService", "GameInputSvc" };
 
-        if (!watcher.Start(gamePid, triggerDevices, diagnosticDevices, brokerProcessNames))
+        bool started;
+        try { started = watcher.Start(gamePid, triggerDevices, diagnosticDevices, brokerProcessNames); }
+        catch { watcher.Dispose(); throw; }
+        if (!started)
         {
             Log("Acquisition: ETW unavailable — per-device T+Xs values control timing.");
             watcher.Dispose();
@@ -383,7 +386,10 @@ public sealed class LaunchOrchestrator : IDisposable
         // logAllHidOpens=true: also log any HID-looking path the kernel reports
         // even when it doesn't match a resolved watched path — this is how we
         // discover path-format mismatches and broker pre-opens.
-        if (!watcher.Start(gamePid, devices, null, brokerProcessNames, logAllHidOpens: true))
+        bool started;
+        try { started = watcher.Start(gamePid, devices, null, brokerProcessNames, logAllHidOpens: true); }
+        catch { watcher.Dispose(); throw; }
+        if (!started)
         {
             Log("Diagnostic watcher: ETW unavailable.");
             watcher.Dispose();

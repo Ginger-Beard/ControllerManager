@@ -20,7 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Management" Version="10.0.0" />
+    <PackageReference Include="System.Management" Version="10.0.8" />
     <!-- Microsoft's ETW consumer library — used by FirstDeviceAcquisitionWatcher
          to subscribe to Microsoft-Windows-Kernel-File events and detect when the
          game opens its first HID device file. ~2 MB native deps; admin required

@@ -252,8 +252,9 @@ public sealed class DeviceEnumerator
 
         if (handle.IsInvalid)
         {
-            bool denied = Marshal.GetLastWin32Error() == ERROR_ACCESS_DENIED;
-            handle.Dispose();
+            bool denied;
+            try { denied = Marshal.GetLastWin32Error() == ERROR_ACCESS_DENIED; }
+            finally { handle.Dispose(); }
 
             // Extract VID/PID from the instance ID string as fallback — available even when
             // the device is inaccessible (HidHide-blocked or pnputil-disabled).

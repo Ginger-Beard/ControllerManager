@@ -29,7 +29,7 @@ public static class ShortcutExporter
         var shellType = Type.GetTypeFromProgID("WScript.Shell")
                      ?? throw new InvalidOperationException("WScript.Shell COM not available.");
         dynamic shell    = Activator.CreateInstance(shellType)!;
-        dynamic shortcut = shell.CreateShortcut(lnkPath);
+        dynamic shortcut = shell.CreateShortcut(lnkPath); // lgtm[cs/invalid-dynamic-call] — intentional WScript.Shell COM late-binding
 
         shortcut.TargetPath       = schtasks;
         shortcut.Arguments        = $"/Run /TN \"{LaunchTaskManager.TaskName(profileId)}\"";
