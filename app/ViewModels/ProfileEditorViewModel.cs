@@ -333,7 +333,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         // user needing to know to set it manually.
         if (sender is not DeviceAssignmentViewModel vm) return;
         if (vm.Role != DeviceRole.RevealAfterStart) return;
-        if (vm.DelaySeconds != 0) return;
+        if (vm.DelaySeconds > 0) return;
         var firstReveal = Assignments.FirstOrDefault(a => a.Role == DeviceRole.RevealAfterStart);
         if (ReferenceEquals(firstReveal, vm))
             vm.DelaySeconds = 5;

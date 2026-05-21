@@ -70,7 +70,6 @@ public partial class GamesView : UserControl
         _sourceRow.Opacity = 0.4;
 
         var data = new DataObject(DragFormat, _dragItem);
-        var dragVm = _dragItem;
         _dragItem = null;
 
         try
@@ -202,7 +201,7 @@ public partial class GamesView : UserControl
     {
         // The row template root is a Border tagged via DataContext = DeviceAssignmentViewModel.
         // Walk up the visual tree until we find it.
-        var current = start as DependencyObject;
+        DependencyObject? current = start;
         while (current is not null)
         {
             if (current is FrameworkElement fe && fe.DataContext is DeviceAssignmentViewModel
