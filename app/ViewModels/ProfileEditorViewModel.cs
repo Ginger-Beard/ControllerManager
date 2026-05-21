@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text;
 using System.Windows.Input;
 using ControllerManager.Models;
 using ControllerManager.Services;
@@ -54,28 +55,34 @@ public sealed class ProfileEditorViewModel : ViewModelBase
             if (Set(ref _acquisitionTrigger, value))
             {
                 IsDirty = true;
-                OnPropertyChanged(nameof(IsTimerMode));
-                OnPropertyChanged(nameof(IsAcquisitionMode));
+                OnPropertyChanged(nameof(WaitForFirstDevice));
+                OnPropertyChanged(nameof(Timeline));
             }
         }
     }
 
-    public bool IsTimerMode => _acquisitionTrigger == AcquisitionTrigger.Timer;
-    public bool IsAcquisitionMode => _acquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened;
+    // UI-facing single toggle. The model still stores the enum (for JSON
+    // round-trips), but the editor only exposes this bool.
+    public bool WaitForFirstDevice
+    {
+        get => _acquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened;
+        set => AcquisitionTrigger = value
+            ? AcquisitionTrigger.FirstDeviceOpened
+            : AcquisitionTrigger.Timer;
+    }
 
     public double PostAcquisitionDelaySeconds
     {
         get => _postAcquisitionDelaySeconds;
-        set { Set(ref _postAcquisitionDelaySeconds, Math.Max(0, value)); IsDirty = true; }
+        set
+        {
+            if (Set(ref _postAcquisitionDelaySeconds, Math.Max(0, value)))
+            {
+                IsDirty = true;
+                OnPropertyChanged(nameof(Timeline));
+            }
+        }
     }
-
-    // For the role dropdown's ItemsSource
-    public static IReadOnlyList<AcquisitionTriggerChoice> AcquisitionTriggers { get; } = [
-        new(AcquisitionTrigger.Timer,             "Fixed time per device"),
-        new(AcquisitionTrigger.FirstDeviceOpened, "When game opens first device"),
-    ];
-
-    public record AcquisitionTriggerChoice(AcquisitionTrigger Mode, string Label);
 
     public bool IsDirty
     {
@@ -110,6 +117,78 @@ public sealed class ProfileEditorViewModel : ViewModelBase
     public bool HasRevealAfterStart =>
         Assignments.Any(a => a.Role == DeviceRole.RevealAfterStart);
 
+    // Live, human-readable description of what happens when this profile runs.
+    // Rebuilt from current Assignments + checkbox/delay state every time any
+    // input changes, so the user sees the actual timeline as they tweak.
+    public string Timeline => BuildTimeline();
+
+    private string BuildTimeline()
+    {
+        var av  = Assignments.Where(a => a.Role == DeviceRole.AlwaysVisible).ToList();
+        var ras = Assignments.Where(a => a.Role == DeviceRole.RevealAfterStart).ToList();
+
+        if (av.Count == 0 && ras.Count == 0)
+            return "Add devices above to see what will happen at game launch.";
+
+        var sb = new StringBuilder();
+
+        sb.Append("At launch: ");
+        if (av.Count > 0)
+        {
+            sb.Append(string.Join(", ", av.Select(a => a.FriendlyName)));
+            sb.AppendLine(av.Count == 1 ? " is visible to the game." : " are visible to the game.");
+        }
+        else
+        {
+            sb.AppendLine("nothing is visible to the game yet.");
+        }
+
+        if (ras.Count == 0)
+        {
+            sb.Append("Anything not in this profile stays hidden for this game.");
+            return sb.ToString();
+        }
+
+        if (WaitForFirstDevice && av.Count > 0)
+        {
+            sb.AppendLine();
+            sb.Append("When the game first opens ");
+            sb.Append(av[0].FriendlyName);
+            sb.AppendLine(":");
+            sb.Append("  ");
+            sb.Append(string.Join(", ", ras.Select(a => a.FriendlyName)));
+            sb.Append(ras.Count == 1 ? " appears " : " all appear ");
+            sb.Append(_postAcquisitionDelaySeconds.ToString("0.###"));
+            sb.AppendLine("s later, back-to-back.");
+            sb.AppendLine();
+            sb.AppendLine("Backup (if the game never directly opens that device — some use RawInput/WGI):");
+            foreach (var r in ras)
+            {
+                sb.Append("  • ");
+                sb.Append(r.FriendlyName);
+                sb.Append(" appears at ");
+                sb.Append(r.DelaySeconds.ToString("0.###"));
+                sb.AppendLine("s.");
+            }
+        }
+        else
+        {
+            sb.AppendLine();
+            sb.AppendLine("After launch:");
+            foreach (var r in ras)
+            {
+                sb.Append("  • ");
+                sb.Append(r.FriendlyName);
+                sb.Append(" appears at ");
+                sb.Append(r.DelaySeconds.ToString("0.###"));
+                sb.AppendLine("s.");
+            }
+        }
+
+        sb.Append("Anything not in this profile stays hidden for this game.");
+        return sb.ToString();
+    }
+
     public HidDevice? SelectedAvailable
     {
         get => _selectedAvailable;
@@ -135,6 +214,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         {
             OnPropertyChanged(nameof(UnassignedDevices));
             OnPropertyChanged(nameof(HasRevealAfterStart));
+            OnPropertyChanged(nameof(Timeline));
         };
 
         AddCommand = new RelayCommand(
@@ -229,6 +309,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         // Track edits so unsaved-changes indicator is accurate; also recompute
         // HasRevealAfterStart when an assignment's role changes.
         IsDirty = true;
+        OnPropertyChanged(nameof(Timeline));
         if (e.PropertyName is not nameof(DeviceAssignmentViewModel.Role)) return;
 
         OnPropertyChanged(nameof(HasRevealAfterStart));
@@ -323,8 +404,8 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         OnPropertyChanged(nameof(ExeName));
         OnPropertyChanged(nameof(ProcessWatcherEnabled));
         OnPropertyChanged(nameof(AcquisitionTrigger));
-        OnPropertyChanged(nameof(IsTimerMode));
-        OnPropertyChanged(nameof(IsAcquisitionMode));
+        OnPropertyChanged(nameof(WaitForFirstDevice));
+        OnPropertyChanged(nameof(Timeline));
         OnPropertyChanged(nameof(PostAcquisitionDelaySeconds));
         OnPropertyChanged(nameof(HasRevealAfterStart));
     }

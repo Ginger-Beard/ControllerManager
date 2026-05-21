@@ -51,6 +51,9 @@ public sealed class SettingsViewModel : ViewModelBase
 
     public ICommand OpenLogFolderCommand       { get; }
     public ICommand OpenHidHideDownloadCommand { get; }
+    public ICommand OpenHidHideHomeCommand     { get; }
+    public ICommand OpenRepoCommand            { get; }
+    public ICommand OpenNefariusCommand        { get; }
 
     public SettingsViewModel(SettingsStore store)
     {
@@ -74,6 +77,21 @@ public sealed class SettingsViewModel : ViewModelBase
         OpenHidHideDownloadCommand = new RelayCommand(_ =>
             Process.Start(new ProcessStartInfo(
                 "https://github.com/nefarius/HidHide/releases/latest")
+                { UseShellExecute = true }));
+
+        OpenHidHideHomeCommand = new RelayCommand(_ =>
+            Process.Start(new ProcessStartInfo(
+                "https://github.com/nefarius/HidHide")
+                { UseShellExecute = true }));
+
+        OpenRepoCommand = new RelayCommand(_ =>
+            Process.Start(new ProcessStartInfo(
+                "https://github.com/Ginger-Beard/ControllerManager")
+                { UseShellExecute = true }));
+
+        OpenNefariusCommand = new RelayCommand(_ =>
+            Process.Start(new ProcessStartInfo(
+                "https://nefarius.at")
                 { UseShellExecute = true }));
     }
 

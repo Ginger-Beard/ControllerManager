@@ -91,48 +91,67 @@
                           Margin="0,0,0,4"
                           ToolTip="When on, Controller Manager will detect the game starting and apply this profile automatically. When off, you must launch via the Dashboard, a shortcut, or the Steam wrapper."/>
 
-                <!-- Acquisition trigger: timer vs. detect-first-device-open -->
-                <DockPanel Margin="0,4,0,0"
-                           ToolTip="When to start revealing the Reveal-After-Start devices.&#x0a;&#x0a;• Fixed time per device — strict T+Xs timing on each row.&#x0a;• When game opens first device — kernel ETW watches for the game opening one of the Always-Visible devices, then reveals everything after a short grace period. The per-device T+Xs values stay as a safety net upper bound in case the game uses RawInput/WGI and never opens device files directly.">
-                    <TextBlock DockPanel.Dock="Left" Text="Reveal trigger:"
-                               VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <ComboBox ItemsSource="{x:Static vm:ProfileEditorViewModel.AcquisitionTriggers}"
-                              SelectedValue="{Binding Editor.AcquisitionTrigger}"
-                              SelectedValuePath="Mode"
-                              DisplayMemberPath="Label"
-                              HorizontalAlignment="Left" MinWidth="220"/>
-                </DockPanel>
+                <!-- Reveal-phase controls — only meaningful when the profile has
+                     at least one Reveal After Start device. Everything in here
+                     hides when the user's only got Always Visible devices. -->
+                <StackPanel Visibility="{Binding Editor.HasRevealAfterStart,
+                                                 Converter={StaticResource BoolVisConverter}}">
 
-                <!-- Post-acquisition grace period — only meaningful in FirstDeviceOpened mode -->
-                <DockPanel Margin="0,4,0,0"
-                           Visibility="{Binding Editor.IsAcquisitionMode,
-                               Converter={StaticResource BoolVisConverter}}"
-                           ToolTip="Wait this many seconds AFTER the game opens its first Always-Visible device, before revealing the Reveal-After-Start devices.&#x0a;&#x0a;The game's slot-#1 decision happens some time after it first opens a controller — if other devices arrive during that window they can steal slot #1. 1.5s is a safe default; increase if your game still misassigns slot #1, decrease if your game commits faster (rarely needed).">
-                    <TextBlock DockPanel.Dock="Left" Text="Wait after first device opened:"
-                               VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <TextBlock DockPanel.Dock="Right" Text="s"
-                               VerticalAlignment="Center" Margin="2,0,0,0"/>
-                    <TextBox DockPanel.Dock="Right" Width="48" VerticalContentAlignment="Center"
-                             HorizontalAlignment="Left"
-                             Text="{Binding Editor.PostAcquisitionDelaySeconds,
-                                            UpdateSourceTrigger=LostFocus,
-                                            StringFormat={}{0:0.###},
-                                            ConverterCulture=en-US}"/>
-                    <Border/>
-                </DockPanel>
+                    <CheckBox Content="Wait until the game opens the first device before revealing the rest"
+                              IsChecked="{Binding Editor.WaitForFirstDevice}"
+                              Margin="0,4,0,0"
+                              ToolTip="When on, Controller Manager watches for the moment the game touches your wheel and then reveals the rest. Faster and more reliable for FFB games like Forza. When off, each device reveals at the fixed time you set on its row below."/>
+
+                    <!-- Post-acquisition grace period — only meaningful when the checkbox is on -->
+                    <DockPanel Margin="20,4,0,0"
+                               Visibility="{Binding Editor.WaitForFirstDevice,
+                                   Converter={StaticResource BoolVisConverter}}"
+                               ToolTip="After the game touches your wheel, wait this many seconds before revealing everything else. The pause gives the game time to lock your wheel into slot #1 before the pedals and shifter show up. 1.5s works for most games; bump it to 2 or 2.5 if your wheel still ends up in the wrong slot.">
+                        <TextBlock DockPanel.Dock="Left" Text="Wait this many seconds after:"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock DockPanel.Dock="Right" Text="s"
+                                   VerticalAlignment="Center" Margin="2,0,0,0"/>
+                        <TextBox DockPanel.Dock="Right" Width="48" VerticalContentAlignment="Center"
+                                 HorizontalAlignment="Left"
+                                 Text="{Binding Editor.PostAcquisitionDelaySeconds,
+                                                UpdateSourceTrigger=LostFocus,
+                                                StringFormat={}{0:0.###},
+                                                ConverterCulture=en-US}"/>
+                        <Border/>
+                    </DockPanel>
+                </StackPanel>
             </StackPanel>
 
             <Separator Grid.Row="1" Margin="0,0,0,10"/>
 
-            <!-- ── Assignments label ──────────────────────────────────────── -->
-            <DockPanel Grid.Row="2" Margin="0,4,0,4">
-                <Label DockPanel.Dock="Left" Content="Devices in this profile"
-                       FontWeight="SemiBold" Padding="0"/>
-                <TextBlock Foreground="#888" FontStyle="Italic" FontSize="11"
-                           VerticalAlignment="Center" Margin="8,0,0,0"
-                           TextTrimming="CharacterEllipsis"
-                           Text="Drag ☰ to reorder. Times are absolute seconds from game launch (decimals OK)."/>
-            </DockPanel>
+            <!-- ── Assignments label + explainer + live preview ──────────── -->
+            <StackPanel Grid.Row="2" Margin="0,4,0,4">
+                <DockPanel>
+                    <Label DockPanel.Dock="Left" Content="Devices in this profile"
+                           FontWeight="SemiBold" Padding="0"/>
+                    <TextBlock Foreground="#888" FontStyle="Italic" FontSize="11"
+                               VerticalAlignment="Center" Margin="8,0,0,0"
+                               TextTrimming="CharacterEllipsis"
+                               Text="Drag ☰ to reorder."/>
+                </DockPanel>
+
+                <!-- Static explainer: how the roles + 'not in list' work -->
+                <TextBlock TextWrapping="Wrap" Margin="0,4,0,0"
+                           Foreground="#666" FontSize="11">
+                    <Run FontWeight="SemiBold">Always Visible</Run><Run Text=" — the game sees this device immediately at launch (your wheel, your gamepad)."/><LineBreak/>
+                    <Run FontWeight="SemiBold">Reveal After Start</Run><Run Text=" — hidden when the game starts, then appears at the time you set on its row. Staggered times (e.g. 11.0, 11.1, 11.2) give each device its own in-game slot."/><LineBreak/>
+                    <Run Text="Anything not in this list is hidden during the game."/>
+                </TextBlock>
+
+                <!-- Live preview: built from current state, updates as user tweaks -->
+                <Border Background="#F4F8FC" BorderBrush="#BFD0E0" BorderThickness="1"
+                        Padding="8,6" Margin="0,6,0,0" CornerRadius="3">
+                    <TextBlock Text="{Binding Editor.Timeline}"
+                               TextWrapping="Wrap"
+                               FontFamily="Consolas" FontSize="11"
+                               Foreground="#333"/>
+                </Border>
+            </StackPanel>
 
             <!-- ── Assignments list (resizable, drag-drop reorderable) ────── -->
             <Border Grid.Row="3" BorderBrush="#CCC" BorderThickness="1">
@@ -201,14 +220,14 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </StackPanel.Style>
-                                            <TextBlock Text="T+" VerticalAlignment="Center" Margin="0,0,1,0"
+                                            <TextBlock Text="Reveal at" VerticalAlignment="Center" Margin="0,0,3,0"
                                                        Foreground="#888" FontSize="11"/>
                                             <TextBox Width="40" VerticalContentAlignment="Center"
                                                      Text="{Binding DelaySeconds,
                                                                     UpdateSourceTrigger=LostFocus,
                                                                     StringFormat={}{0:0.###},
                                                                     ConverterCulture=en-US}"
-                                                     ToolTip="Seconds after game launch when this device should be revealed (decimals OK).&#x0a;&#x0a;In acquisition mode this also acts as a SAFETY NET: if the game uses RawInput or WGI and never opens its device files directly, the ETW signal never fires — these values then control timing. Pick numbers that would work in pure Timer mode (for Forza-style: first device at ~11s, others at 11.1, 11.2, etc).&#x0a;&#x0a;If the acquisition signal does fire, reveals happen sooner — the times here become an upper bound, not a target."/>
+                                                     ToolTip="How many seconds after the game starts before this device is revealed. Stagger pedals and shifter slightly so they get the right in-game slot (e.g. 11, 11.1, 11.2). If acquisition mode is on, the reveal happens sooner when the game opens the wheel — these numbers then act as a fallback."/>
                                             <TextBlock Text="s" VerticalAlignment="Center" Margin="1,0,0,0"/>
                                         </StackPanel>
 
@@ -224,12 +243,12 @@
                                                 Command="{Binding DataContext.Editor.MoveUpCommand,
                                                     RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding}"
-                                                ToolTip="Move up — affects reveal order during launch"/>
+                                                ToolTip="Move up. Devices reveal top-to-bottom — first device in the list gets the next available controller slot."/>
                                         <Button Grid.Column="5" Content="↓" Width="22" Margin="2,0,0,0"
                                                 Command="{Binding DataContext.Editor.MoveDownCommand,
                                                     RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding}"
-                                                ToolTip="Move down — affects reveal order during launch"/>
+                                                ToolTip="Move down. Devices reveal top-to-bottom — first device in the list gets the next available controller slot."/>
                                         <Button Grid.Column="6" Content="✕" Width="22" Margin="2,0,0,0"
                                                 Command="{Binding DataContext.Editor.RemoveCommand,
                                                     RelativeSource={RelativeSource AncestorType=UserControl}}"
@@ -262,7 +281,7 @@
                           Margin="8,0,0,0"/>
                 <TextBlock>
                     <Run Text="Add devices to profile"/>
-                    <Run Text=" — devices not listed here are hidden from this game"
+                    <Run Text=" — anything you don't add stays hidden when you play"
                          Foreground="#888" FontStyle="Italic"/>
                 </TextBlock>
             </DockPanel>
@@ -273,7 +292,14 @@
                      SelectedItem="{Binding Editor.SelectedAvailable}"
                      DisplayMemberPath="FriendlyName"
                      BorderThickness="1" BorderBrush="#CCC"
-                     Margin="0,0,0,6"/>
+                     Margin="0,0,0,6">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <EventSetter Event="MouseDoubleClick"
+                                     Handler="PickerItem_MouseDoubleClick"/>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+            </ListBox>
 
             <!-- ── Add buttons ────────────────────────────────────────────── -->
             <StackPanel Grid.Row="7" Orientation="Horizontal" Margin="0,0,0,12">

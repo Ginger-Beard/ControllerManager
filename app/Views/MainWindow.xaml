@@ -341,11 +341,20 @@
                                 </GridViewColumn>
 
                                 <!-- Friendly name — VID:PID in tooltip, instance ID via context menu -->
-                                <GridViewColumn Header="Device" Width="450">
+                                <GridViewColumn Header="Device">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <TextBlock Text="{Binding FriendlyName}"
-                                                       ToolTip="{Binding VidPidShort}"/>
+                                                       TextTrimming="CharacterEllipsis">
+                                                <TextBlock.ToolTip>
+                                                    <ToolTip>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding FriendlyName}" FontWeight="SemiBold"/>
+                                                            <TextBlock Text="{Binding VidPidShort}" Foreground="Gray"/>
+                                                        </StackPanel>
+                                                    </ToolTip>
+                                                </TextBlock.ToolTip>
+                                            </TextBlock>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
@@ -395,7 +404,8 @@
                         <!-- Installed -->
                         <TextBlock Foreground="#3CB371" FontWeight="SemiBold" VerticalAlignment="Center"
                                    Visibility="{Binding HidHideInstalled, Converter={StaticResource BoolVisConverter}}">
-                            ✓ Installed
+                            <Hyperlink Command="{Binding OpenHidHideHomeCommand}"
+                                       Foreground="#3CB371">✓ Installed</Hyperlink>
                         </TextBlock>
                         <!-- Not installed -->
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -440,34 +450,59 @@
 
                     <TextBlock Text="Logging" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,10"/>
 
-                    <DockPanel Margin="0,0,0,8">
-                        <TextBlock DockPanel.Dock="Left" Text="Log level:"
-                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
-                        <ComboBox ItemsSource="{Binding LogLevels}"
-                                  SelectedItem="{Binding LogLevel}"
-                                  Width="120"/>
-                    </DockPanel>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="80"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="28"/>
+                            <RowDefinition Height="28"/>
+                        </Grid.RowDefinitions>
 
-                    <DockPanel Margin="0,0,0,4"
-                               ToolTip="Log file location — Off means no file is written">
-                        <Button DockPanel.Dock="Right" Content="Open folder"
-                                Command="{Binding OpenLogFolderCommand}"
-                                Padding="8,2" Margin="8,0,0,0"/>
-                        <TextBlock Text="{Binding LogFilePath}"
-                                   VerticalAlignment="Center"
-                                   TextTrimming="CharacterEllipsis"
-                                   Foreground="Gray"
-                                   FontFamily="Consolas" FontSize="11"/>
-                    </DockPanel>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Log level:"
+                                   VerticalAlignment="Center"/>
+                        <ComboBox Grid.Row="0" Grid.Column="1"
+                                  ItemsSource="{Binding LogLevels}"
+                                  SelectedItem="{Binding LogLevel}"
+                                  Width="120" HorizontalAlignment="Left"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Log file:"
+                                   VerticalAlignment="Center"/>
+                        <DockPanel Grid.Row="1" Grid.Column="1"
+                                   ToolTip="Log file location — Off means no file is written">
+                            <Button DockPanel.Dock="Right" Content="Open folder"
+                                    Command="{Binding OpenLogFolderCommand}"
+                                    Padding="8,2" Margin="8,0,0,0"/>
+                            <TextBlock Text="{Binding LogFilePath}"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"
+                                       Foreground="Gray"
+                                       FontFamily="Consolas" FontSize="11"/>
+                        </DockPanel>
+                    </Grid>
 
                     <Separator Margin="0,8,0,12"/>
 
                     <TextBlock Text="About" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,10"/>
-                    <TextBlock Foreground="Gray" TextWrapping="Wrap">
+                    <TextBlock Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,8">
                         <Run Text="Controller Manager — per-game HID device profile manager."/>
                         <LineBreak/>
-                        <Run Text="Source: github.com/JoshRacine/hid-reorder"/>
+                        <Run Text="Built by Josh Racine.  Source: "/>
+                        <Hyperlink Command="{Binding OpenRepoCommand}">github.com/Ginger-Beard/ControllerManager</Hyperlink>
                     </TextBlock>
+
+                    <Border Background="#F0F8F4" BorderBrush="#B8DEC8" BorderThickness="1"
+                            CornerRadius="3" Padding="10,8" Margin="0,0,0,0">
+                        <TextBlock TextWrapping="Wrap" Foreground="#2A5A3A" FontSize="11">
+                            <Run FontWeight="SemiBold" Text="Huge thanks to Nefarius (Benjamin Höglinger-Stelzer)"/>
+                            <Run Text=" for "/>
+                            <Hyperlink Command="{Binding OpenHidHideHomeCommand}" Foreground="#2A7A4A">HidHide</Hyperlink>
+                            <Run Text=" — the signed kernel driver that does the actual device hiding. Controller Manager is nothing without it. Check out his work at "/>
+                            <Hyperlink Command="{Binding OpenNefariusCommand}" Foreground="#2A7A4A">nefarius.at</Hyperlink>
+                            <Run Text="."/>
+                        </TextBlock>
+                    </Border>
 
                 </StackPanel>
             </TabItem>

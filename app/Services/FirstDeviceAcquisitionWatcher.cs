@@ -33,59 +33,84 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
 {
     private const string SessionName = "ControllerManager_DeviceAcquisition";
 
+    public readonly record struct DeviceToWatch(string Win32Path, string FriendlyName);
+
     private TraceEventSession?    _session;
     private Task?                 _processTask;
     private int                   _targetPid = -1;
-    private HashSet<string>       _watchedNtPaths       = new(StringComparer.OrdinalIgnoreCase);
+    // path → friendly name. Used for all logging.
+    private Dictionary<string, string> _pathToName = new(StringComparer.OrdinalIgnoreCase);
+    // Subset of _pathToName whose opens should also fire Acquired (AV devices).
+    private HashSet<string>       _triggerPaths         = new(StringComparer.OrdinalIgnoreCase);
     private HashSet<string>       _watchedProcessNames  = new(StringComparer.OrdinalIgnoreCase);
+    private System.Diagnostics.Stopwatch _sessionClock  = new();
     private int                   _fired;
 
     public event Action? Acquired;
 
     /// <summary>
-    /// Subscribe to the kernel file-create stream filtered to the game's PID
-    /// (or one of the named broker processes) AND the NT paths of the supplied
-    /// Win32 device interface paths. Returns true if ETW + path resolution
-    /// succeeded; false on any failure (caller should fall back to timer-based
-    /// reveal).
+    /// Subscribe to the kernel file-create stream. Two device sets are watched:
+    /// <list type="bullet">
+    /// <item><b>trigger devices</b> — the Always Visible devices for the profile.
+    /// Opens on these by the game PID (or a named broker) fire <see cref="Acquired"/>
+    /// once per session.</item>
+    /// <item><b>diagnostic devices</b> — the Reveal-After-Start devices. The game
+    /// can't see these during the wait phase (HidHide blocks them), so opens on
+    /// them should be zero or near-zero. Any opens that DO occur are logged
+    /// verbosely as a sanity check on the hiding pipeline.</item>
+    /// </list>
+    /// Returns true if ETW + path resolution succeeded; false on any failure
+    /// (caller should fall back to timer-based reveal).
     /// </summary>
     /// <param name="targetPid">The game's PID.</param>
-    /// <param name="alwaysVisibleDevicePaths">Win32 device interface paths to watch.</param>
-    /// <param name="brokerProcessNames">Additional process names (without .exe) whose opens of the watched paths should also fire the signal — e.g. <c>GameInputService</c> for WGI titles.</param>
+    /// <param name="triggerDevices">Always Visible devices — their opens fire the signal.</param>
+    /// <param name="diagnosticDevices">Reveal-After-Start devices — opens logged only.</param>
+    /// <param name="brokerProcessNames">Additional process names (without .exe) whose opens of the trigger paths should also fire the signal — e.g. <c>GameInputService</c> for WGI titles.</param>
     public bool Start(int targetPid,
-                      IEnumerable<string> alwaysVisibleDevicePaths,
+                      IEnumerable<DeviceToWatch> triggerDevices,
+                      IEnumerable<DeviceToWatch>? diagnosticDevices = null,
                       IEnumerable<string>? brokerProcessNames = null)
     {
         if (_session != null)
             throw new InvalidOperationException("FirstDeviceAcquisitionWatcher already started");
 
-        _targetPid = targetPid;
-        _fired     = 0;
-        _watchedNtPaths      = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _targetPid           = targetPid;
+        _fired               = 0;
+        _pathToName          = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        _triggerPaths        = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         _watchedProcessNames = new HashSet<string>(brokerProcessNames ?? Array.Empty<string>(),
                                                    StringComparer.OrdinalIgnoreCase);
 
         // Resolve each Win32 device interface path (\\?\HID#xxx#{guid}) to its
         // NT object path (\Device\xxx) so the substring match below is exact.
-        foreach (var win32Path in alwaysVisibleDevicePaths)
+        foreach (var dev in triggerDevices)
         {
-            var nt = ResolveNtPath(win32Path);
-            if (!string.IsNullOrEmpty(nt))
+            var nt = ResolveNtPath(dev.Win32Path);
+            if (string.IsNullOrEmpty(nt)) { Logger.WriteVerbose($"[Acquisition] Could not resolve NT path for trigger '{dev.FriendlyName}' ({dev.Win32Path})"); continue; }
+            _pathToName[nt] = dev.FriendlyName;
+            _triggerPaths.Add(nt);
+            Logger.WriteVerbose($"[Acquisition] Trigger watch: '{dev.FriendlyName}' → {nt}");
+        }
+
+        if (diagnosticDevices is not null)
+        {
+            foreach (var dev in diagnosticDevices)
             {
-                _watchedNtPaths.Add(nt);
-                Logger.WriteVerbose($"[Acquisition] Watching: {nt}");
-            }
-            else
-            {
-                Logger.WriteVerbose($"[Acquisition] Could not resolve NT path for: {win32Path}");
+                var nt = ResolveNtPath(dev.Win32Path);
+                if (string.IsNullOrEmpty(nt)) continue;
+                if (_pathToName.ContainsKey(nt)) continue; // already a trigger
+                _pathToName[nt] = dev.FriendlyName;
+                Logger.WriteVerbose($"[Acquisition] Diagnostic watch (hidden): '{dev.FriendlyName}' → {nt}");
             }
         }
 
-        if (_watchedNtPaths.Count == 0)
+        if (_triggerPaths.Count == 0)
         {
             Logger.Write("[Acquisition] No resolvable always-visible device paths — ETW watcher won't help.");
             return false;
         }
+
+        _sessionClock = System.Diagnostics.Stopwatch.StartNew();
 
         try
         {
@@ -113,7 +138,7 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
                 ? "(none)"
                 : string.Join(",", _watchedProcessNames);
             Logger.WriteVerbose(
-                $"[Acquisition] Watching PID {targetPid} (+ brokers: {brokers}) for {_watchedNtPaths.Count} path(s)");
+                $"[Acquisition] Watching PID {targetPid} (+ brokers: {brokers}) — {_triggerPaths.Count} trigger path(s), {_pathToName.Count - _triggerPaths.Count} diagnostic path(s)");
             return true;
         }
         catch (Exception ex)
@@ -129,28 +154,27 @@ public sealed class FirstDeviceAcquisitionWatcher : IDisposable
         var path = data.FileName;
         if (string.IsNullOrEmpty(path)) return;
 
-        bool pathMatch = _watchedNtPaths.Contains(path);
+        if (!_pathToName.TryGetValue(path, out var friendly)) return;
 
-        // Diagnostic: log every open of a watched path regardless of opener
-        // so we can confirm broker theories (which PID/process is actually
-        // opening the device file). Rare event — set hits are O(1) and the
-        // watched set is small, so spam risk is low.
-        if (pathMatch)
-        {
-            Logger.WriteVerbose(
-                $"[Acquisition] Watched-path open: '{path}' by PID={data.ProcessID} Process='{data.ProcessName}'");
-        }
+        var elapsedSec = _sessionClock.Elapsed.TotalSeconds;
+        bool isTrigger = _triggerPaths.Contains(path);
+
+        // Always log opens on watched paths with friendly name + relative time —
+        // useful for both real-time debugging and future calibration features.
+        Logger.WriteVerbose(
+            $"[Acquisition] +{elapsedSec:0.000}s '{friendly}' opened by PID={data.ProcessID} Process='{data.ProcessName}' (trigger={isTrigger})");
+
+        if (!isTrigger) return;
 
         bool pidMatch = (_targetPid >= 0 && data.ProcessID == _targetPid)
                      || (_watchedProcessNames.Count > 0
                          && _watchedProcessNames.Contains(data.ProcessName));
-
-        if (!pidMatch || !pathMatch) return;
+        if (!pidMatch) return;
 
         if (Interlocked.Exchange(ref _fired, 1) != 0) return;
 
         Logger.Write(
-            $"[Acquisition] Signal fired: {path} (PID={data.ProcessID}, Process='{data.ProcessName}')");
+            $"[Acquisition] Signal fired by '{friendly}' at +{elapsedSec:0.000}s (PID={data.ProcessID}, Process='{data.ProcessName}')");
         try { Acquired?.Invoke(); } catch (Exception ex) { Logger.WriteException("Acquired handler", ex); }
     }
 

@@ -379,6 +379,90 @@ forwards:
 
 ## Open work
 
+### Auto-detect timing (Calibration Mode)
+
+**Concept.** Most users have no idea what to put in their per-device "Reveal at"
+times. They guess, fail, re-guess. We can do better by measuring the game's
+actual device-open order on a calibration run and using that to drive profile
+configuration.
+
+**Phase 0 — Just observe first.** Before designing the feature, run the
+existing diagnostic logging (shipped in the current watcher) across a few
+real sessions and a few games to understand what we're actually working with:
+
+- Is open order stable run-to-run on the same machine?
+- How much does cold boot vs warm cache shift things?
+- Do different games (Forza vs ACC vs iRacing vs RBR) have wildly different
+  patterns, or is there a common shape?
+- How does GameInputService broker attribution affect what we see for
+  WGI titles?
+- Is there a clear "slot assignment" signal we can identify from the open
+  sequence, or is it more diffuse than that?
+
+**Open question:** still not fully understood why games pick the in-game
+device order they do. Is it the order Windows enumerates HIDs to the game's
+DirectInput/WGI call? Is it the order the game internally opens them? Does
+it correlate with the file-open order ETW sees, or is there a separate
+slot-assignment step? Worth answering before building a "we know better than
+the user" auto-apply feature on top.
+
+**Phase 1 — One-shot calibration (the actual feature).** Once we have data:
+
+1. New button on the Games tab: **"Run timing test"**.
+2. Orchestrator launches the game with **no hiding active** (full device
+   visibility — we lose the FFB-slot-fix for this session, but that's the
+   point: we're measuring, not playing).
+3. Watcher operates in **record-all mode**: monitor every device's NT path,
+   log a timestamped record of every kernel file-create with PID + ProcessName.
+4. User plays for 5–10s and exits. CM presents the timeline:
+   ```
+   0.00s   forza_horizon_6.exe spawned
+   4.21s   MOZA R9 Wheel opened by GameInputService
+   4.23s   Heusinkveld Pedals opened by GameInputService
+   4.24s   Sequential Shifter opened by GameInputService
+   4.26s   Handbrake opened by GameInputService
+   ```
+5. **"Apply these to my profile"** button — populates the device list with
+   the **literal observed order and times** (no automatic safety margin —
+   that just hides the data from the user). First device → Always Visible;
+   rest → Reveal After Start at the observed times. User can then drag rows
+   to reorder, bump times manually if they want a margin, or accept as-is.
+
+This works because the user can SEE the measurement and decide for themselves
+whether to pad it. A 2s margin baked in silently is paternalistic when the
+actual numbers are right there.
+
+**Phase 2 — Continuous monitoring (weak maybe, possibly excessive).**
+Diagnostic logging already records open timing on watched paths during normal
+sessions. *In theory* we could persist those records per-profile across runs
+and use them to detect drift — surface a toast if the latest run's signal
+time deviates from rolling history.
+
+Why this is probably overkill: once a user has reasonable times from
+Phase 1, they're unlikely to need automatic re-tuning. Cold-boot vs warm
+cache adds noise but the slot-fix window (Forza-style) is ~3-5s wide, so
+sub-second drift doesn't actually break anything. The toast prompts would
+mostly be noise. Revisit only if real user reports show drift is a problem.
+The math (mean + 2σ, EWMA, etc.) is a sub-problem of Phase 2 that we don't
+need to solve unless we ever build it.
+
+**Edge cases / caveats** (mostly Phase 1):
+- **Calibration run has no FFB.** UI must be honest about this so users don't
+  treat the test as a normal session.
+- **WGI brokers.** Opens are attributed to `GameInputService`, not the game
+  PID. Already handled in the watcher; calibration UI should display the
+  honest opener (`"opened by GameInputService on behalf of forza.exe"`).
+- **Anti-cheat.** Calibration is pure ETW (no process touch). EAC-safe.
+
+**Implementation hook (already in place):** The watcher's new
+`Start(triggerDevices, diagnosticDevices)` API already records timestamped
+opens. For Phase 0, just have the user enable verbose logging and run real
+sessions — we have the data we need without writing more code.
+
+**Why this is high-value (Phase 1)**: it converts the most fragile, error-prone
+part of setup ("pick numbers that work") into "measure once and click apply."
+Lower support load, better outcomes for non-technical users.
+
 ### Steam launch UAC (deferred — process watcher covers 99% of cases)
 
 **Current state**: Process watcher polls every 500ms for configured game

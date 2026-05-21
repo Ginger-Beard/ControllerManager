@@ -281,18 +281,25 @@ public sealed class LaunchOrchestrator : IDisposable
     /// </summary>
     private FirstDeviceAcquisitionWatcher? StartAcquisitionWatcher(Profile profile, int gamePid)
     {
-        var allDevices    = _enumerator.GetAll(showAllHid: true);
-        var watchedPaths  = new List<string>();
-        var alwaysVisible = profile.KeepEnabled.Select(d => d.InstanceId)
+        var allDevices       = _enumerator.GetAll(showAllHid: true);
+        var alwaysVisible    = profile.KeepEnabled.Select(d => d.InstanceId)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var revealAfterStart = profile.DisableThenRestore.Select(d => d.InstanceId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var triggerDevices    = new List<FirstDeviceAcquisitionWatcher.DeviceToWatch>();
+        var diagnosticDevices = new List<FirstDeviceAcquisitionWatcher.DeviceToWatch>();
+
         foreach (var d in allDevices)
         {
-            if (!alwaysVisible.Contains(d.InstanceId)) continue;
-            if (!string.IsNullOrEmpty(d.DeviceInterfacePath))
-                watchedPaths.Add(d.DeviceInterfacePath);
+            if (string.IsNullOrEmpty(d.DeviceInterfacePath)) continue;
+            if (alwaysVisible.Contains(d.InstanceId))
+                triggerDevices.Add(new(d.DeviceInterfacePath, d.FriendlyName));
+            else if (revealAfterStart.Contains(d.InstanceId))
+                diagnosticDevices.Add(new(d.DeviceInterfacePath, d.FriendlyName));
         }
 
-        if (watchedPaths.Count == 0)
+        if (triggerDevices.Count == 0)
         {
             Log("Acquisition: no Always-Visible devices to watch — per-device T+Xs values control timing.");
             return null;
@@ -334,7 +341,7 @@ public sealed class LaunchOrchestrator : IDisposable
         // no broker needed.
         var brokerProcessNames = new[] { "GameInputService", "GameInputSvc" };
 
-        if (!watcher.Start(gamePid, watchedPaths, brokerProcessNames))
+        if (!watcher.Start(gamePid, triggerDevices, diagnosticDevices, brokerProcessNames))
         {
             Log("Acquisition: ETW unavailable — per-device T+Xs values control timing.");
             watcher.Dispose();

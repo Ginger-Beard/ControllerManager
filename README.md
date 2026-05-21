@@ -32,7 +32,7 @@ actually unplugging anything.
 
 ## How it works in plain language
 
-Every game profile is a short list of your devices, each tagged one of three ways:
+Every game profile is a short list of your devices, each tagged one of two ways:
 
 - **Always Visible** — the game sees this from the moment it launches.
   *(Your wheel base goes here. Your gamepad goes here for non-racing games.)*
@@ -41,10 +41,10 @@ Every game profile is a short list of your devices, each tagged one of three way
   next available controller slot.
   *(Your pedals and shifter usually go here for FFB games, so the wheel grabs slot
   #1 alone.)*
-- **Always Hidden** — the game never sees this device.
-  *(Your gamepad for racing games. Your sim rig for non-racing games.)*
 
-Anything not in the profile is also hidden from the game.
+**Anything not in the profile is hidden from the game.** That's how you keep your
+gamepad out of a racing game, or your sim rig out of a controller game — just don't
+add it. No "hidden" role needed; absent = hidden.
 
 **Other apps see everything normally.** SimHub, Pit House, MOZA, Fanatec drivers,
 Logitech G HUB — all of them keep full access to all your devices during a game
@@ -79,14 +79,14 @@ The classic case.
 
 1. **Games tab → New profile** — name it "Forza Horizon 6", browse to
    `forzahorizon6.exe` (Steam: `...steamapps\common\ForzaHorizon6\forzahorizon6.exe`).
-2. Click **+ Add to profile** for each device you've got — wheel, pedals, shifter,
-   handbrake, button box, gamepad.
+2. Click **+ Add to profile** for each device you want the game to see — wheel,
+   pedals, shifter, handbrake, button box. **Don't add the gamepad** (or anything
+   else you don't want the game touching — it'll be hidden automatically).
 3. Set roles:
    - Wheel base → **Always Visible**
    - Pedals → **Reveal After Start**
    - Shifter → **Reveal After Start**
    - Handbrake → **Reveal After Start**
-   - Gamepad → **Always Hidden**
 4. Set **Reveal trigger** to **When game opens first device**. (Recommended
    for FFB games.) Leave **Wait after first device opened** at the 1.5s
    default for now.
@@ -100,12 +100,12 @@ via kernel ETW — then waits 1.5 seconds (your "post-acquisition delay") so the
 game has time to lock the wheel as controller slot #1 before revealing the
 rest.
 
-**Also set per-device T+Xs values as a safety net.** Some games (especially
+**Also set per-device "Reveal at" values as a safety net.** Some games (especially
 those using RawInput or WGI) don't open the device file directly, so the ETW
-signal never fires. In that case the T+Xs values control timing. Use values
+signal never fires. In that case the "Reveal at" times control timing. Use values
 that would work in Timer mode (for Forza-style: ~11s on the first, 11.1, 11.2
 on the others) — if ETW fires earlier, the reveals just happen sooner. The
-T+Xs is the upper bound, not the target.
+"Reveal at" time is the upper bound, not the target.
 
 > **MOZA tip:** turn on **Forza Compatibility Mode** in Pit House so the wheel
 > presents as a Fanatec (VID `0EB7`). FH6 detects Fanatec directly via its native
@@ -118,8 +118,8 @@ T+Xs is the upper bound, not the target.
 
 > **If reveals never happen at all (logs show no acquisition signal):** the
 > game probably uses RawInput or WGI and doesn't call CreateFile on the device
-> file. The per-device T+Xs values still control timing in that case — make
-> sure they're set sensibly (e.g. 11s, 11.1s, 11.2s for Forza). The acquisition
+> file. The per-device "Reveal at" values still control timing in that case —
+> make sure they're set sensibly (e.g. 11s, 11.1s, 11.2s for Forza). The acquisition
 > signal is an early-fire optimization on top of the timer; the timer is the
 > source of truth.
 
@@ -147,7 +147,8 @@ via vJoy + SimHub's Control Mapper**:
 3. In the Controller Manager profile for Forza:
    - Wheel base → **Always Visible**
    - vJoy device → **Always Visible**
-   - Every physical pedal set, shifter, handbrake, button box → **Always Hidden**
+   - **Don't add** the physical pedals, shifter, handbrake, or button box —
+     leaving them out of the profile hides them from Forza automatically.
 4. In Forza's controller settings, bind everything to the consolidated vJoy
    device (steering and FFB stay on the wheel).
 
@@ -333,9 +334,11 @@ known-broken list.
 **"Some devices weren't hidden — the game saw them anyway"**
 - Make sure the device appears in the Games-tab device picker (in the row
   list, before you add it to the profile). If it shows up in the picker only
-  with **Show all devices** checked, it has no inputs — the orchestrator
-  skips those. If it has inputs, add it to the profile with role **Always
-  Hidden** or just leave it unassigned (unassigned = hidden during session).
+  with **Show all devices** checked, it has no inputs — the app skips those
+  during a session. If it has inputs and was still seen by the game,
+  double-check it's not assigned a role in the profile — anything in the
+  profile is visible to the game in some form. To hide it, just remove it
+  from the profile entirely.
 
 **Devices show as off in the Devices tab after I closed the app mid-session**
 - HidHide retains the persistent blacklist across reboots; if Controller Manager
@@ -360,6 +363,8 @@ PRs welcome for:
 - Brand additions to the VID table above
 - Game-specific notes (especially anything you confirm works or doesn't work)
 
+GitHub: [Ginger-Beard/ControllerManager](https://github.com/Ginger-Beard/ControllerManager)
+
 ---
 
 ## Project layout
@@ -378,8 +383,12 @@ PRs welcome for:
 
 ## Credits
 
-- Hiding is done by [HidHide](https://github.com/nefarius/HidHide) by
-  [Nefarius Software Solutions](https://nefarius.at/) — MIT licensed, signed
-  kernel filter driver. None of this works without their work.
+Controller Manager is built on top of **[HidHide](https://github.com/nefarius/HidHide)**
+by [Nefarius (Benjamin Höglinger-Stelzer)](https://github.com/nefarius) —
+a signed, MIT-licensed kernel filter driver that does the actual device hiding.
+Without his work none of this would be possible. Huge thanks for the tireless
+work maintaining and improving it.
+
+- Built by [Josh Racine](https://github.com/Ginger-Beard).
 - VID data curated for sim racing hardware; upstream USB ID database at
   [usbutils](https://github.com/gregkh/usbutils).

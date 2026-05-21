@@ -9,7 +9,6 @@ public sealed class DeviceAssignmentViewModel : ViewModelBase
     public static readonly IReadOnlyList<RoleChoice> AllRoles = [
         new(DeviceRole.AlwaysVisible,    "Always Visible"),
         new(DeviceRole.RevealAfterStart, "Reveal After Start"),
-        new(DeviceRole.AlwaysHidden,     "Always Hidden"),
     ];
 
     public string InstanceId   { get; }

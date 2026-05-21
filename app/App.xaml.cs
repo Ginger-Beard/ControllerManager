@@ -92,6 +92,22 @@ public partial class App : Application
             HidHide = new HidHideClient();
             HidHide.RecoverOnStartup();
 
+            if (!HidHide.IsAvailable)
+            {
+                var result = MessageBox.Show(
+                    "HidHide is not installed.\n\n" +
+                    "Controller Manager needs the HidHide kernel driver to hide and reveal devices. " +
+                    "Without it, profiles will have no effect.\n\n" +
+                    "Click OK to open the HidHide download page.",
+                    "HidHide not found",
+                    MessageBoxButton.OKCancel,
+                    MessageBoxImage.Warning);
+                if (result == MessageBoxResult.OK)
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                        "https://github.com/nefarius/HidHide/releases/latest")
+                        { UseShellExecute = true });
+            }
+
             // Single orchestrator shared by tray, dashboard, and process watcher.
             // Constructed before MainWindow so MainViewModel can reference it.
             Orchestrator = new Services.LaunchOrchestrator(HidHide);

@@ -215,6 +215,28 @@ public partial class GamesView : UserControl
 
     private ProfileEditorViewModel? ResolveEditor() =>
         (DataContext as GamesViewModel)?.Editor;
+
+    // Double-clicking a row in the available-devices picker adds it to the
+    // profile. ListBoxItem raises a direct MouseDoubleClick that the parent
+    // ListBox doesn't see, so we hook the item container instead.
+    private void PickerItem_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != System.Windows.Input.MouseButton.Left) return;
+        if (sender is not ListBoxItem item) return;
+        if (item.DataContext is not Models.HidDevice device) return;
+
+        var editor = ResolveEditor();
+        if (editor is null) return;
+
+        // The click already selected the item; AddCommand uses SelectedAvailable.
+        // Belt-and-suspenders: set it explicitly in case selection lagged.
+        editor.SelectedAvailable = device;
+
+        if (editor.AddCommand.CanExecute(null))
+            editor.AddCommand.Execute(null);
+
+        e.Handled = true;
+    }
 }
 
 // ── Adorners ─────────────────────────────────────────────────────────────────
