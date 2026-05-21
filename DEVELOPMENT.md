@@ -798,6 +798,11 @@ first run.
 - Slim publish:
   `dotnet.exe publish -c Release -r win-x64 --no-self-contained -p:PublishSingleFile=true -o publish-fd`
 - Release: push a `vX.Y.Z` tag to trigger GitHub Actions (builds both).
+- Security: CodeQL (C# `security-and-quality`) + NuGet vulnerability audit run on
+  every push/PR to `main` and weekly via `.github/workflows/security.yml`. The
+  workflow's `query-filters` block suppresses pure-style rules (unmanaged-code
+  call counts, empty-catch-block in cleanup paths, LINQ `Where`/`Select` nags,
+  etc.) with the rationale inline — see the comment block in the workflow.
 
 ### Project layout
 ```
