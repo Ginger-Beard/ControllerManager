@@ -98,14 +98,9 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
         // (devices plugged/unplugged, or the Devices tab manually refreshes).
         sharedDeviceList.CollectionChanged += (_, _) => RefreshGamingDevices();
 
-        // No-exe profiles (Sunshine/Apollo) can't be launched from the in-app
-        // button — there's nothing for the orchestrator to spawn, and the
-        // session would just dangle until --restore. Those profiles fire only
-        // via "ControllerManager.exe --launch <id>" from the streaming host.
         LaunchCommand = new RelayCommand(
             _ => Launch(),
-            _ => HasSelection && !IsRunning
-              && !string.IsNullOrWhiteSpace(_selectedProfile?.GameExecutablePath));
+            _ => HasSelection && !IsRunning);
 
         RestoreCommand = new RelayCommand(
             _ => _ = _orchestrator.AbortAsync());

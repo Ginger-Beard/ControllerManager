@@ -485,8 +485,8 @@
                             </TextBlock>
                         </StackPanel>
                     </Button>
-                    <!-- For Sunshine / Apollo / Moonlight / any external launcher
-                         that wants to invoke a profile by command line. -->
+                    <!-- For Sunshine/Apollo (or any external launcher) that
+                         wants to invoke a profile by command line. -->
                     <Button Command="{Binding CopyLaunchCommandCommand}"
                             Padding="8,4" Margin="6,0,0,0"
                             ToolTip="Copy the &quot;ControllerManager.exe&quot; --launch &lt;id&gt; command for this profile.&#x0a;Paste into Sunshine/Apollo's Do command field (Command Preparations).">
@@ -495,7 +495,7 @@
                             <TextBlock Text="Copy launch command" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
-                    <!-- Profile-agnostic restore command. Goes in Sunshine's
+                    <!-- Profile-agnostic restore command. Goes in Sunshine/Apollo's
                          Undo command field so devices are restored when the
                          streaming session ends. No profile id needed — it
                          simply ends whatever is currently active. -->

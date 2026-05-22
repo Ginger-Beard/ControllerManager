@@ -38,6 +38,20 @@ public sealed class LaunchOrchestrator : IDisposable
     // Used to compute the correct "remaining hidden" set as devices are revealed.
     private HashSet<string> _sessionHiddenIds = new(StringComparer.OrdinalIgnoreCase);
 
+    // Allow list captured at session start (expanded keep IDs). The hot-plug
+    // enforcer uses this to decide whether a newly-arrived HID should be hidden.
+    private HashSet<string> _sessionKeepIds = new(StringComparer.OrdinalIgnoreCase);
+
+    // Guards _sessionHiddenIds + the HidHide update calls so that the hot-plug
+    // enforcer and the reveal loop don't race when they both read or update
+    // the session blacklist.
+    private readonly object _sessionStateLock = new();
+
+    // Hot-plug enforcer plumbing. Started after the initial hide, stopped in
+    // RunFlow's finally before EndGameSession.
+    private CancellationTokenSource? _hotPlugCts;
+    private Task?                    _hotPlugTask;
+
     /// <summary>The profile currently running; null when idle.</summary>
     public Profile? ActiveProfile { get; private set; }
 
@@ -103,6 +117,11 @@ public sealed class LaunchOrchestrator : IDisposable
             HideDevices(profile, ct);
             ct.ThrowIfCancellationRequested();
 
+            // Strict allow-list: anything that arrives after this point and
+            // isn't in keepIds gets hidden too. Runs until RunFlow's finally
+            // cancels it. Composes with the reveal phase via _sessionStateLock.
+            StartHotPlugEnforcer(ct);
+
             Process? gameProc = null;
             if (hasExe)
             {
@@ -120,7 +139,7 @@ public sealed class LaunchOrchestrator : IDisposable
                 // Sunshine/Apollo path: the streaming host launches the game,
                 // CM is invoked just to hide/reveal. There's no game PID to
                 // wait on or to scope the ETW watcher to — the flow ends when
-                // something calls --restore (Sunshine Undo) or the user clicks
+                // something calls --restore (Sunshine/Apollo Undo) or the user clicks
                 // Restore in the Dashboard / End Session in the tray.
                 Log("No game executable configured — hide/reveal-only mode (Sunshine/Apollo). " +
                     "Fire --restore (or click Restore on the Dashboard) to end this session.");
@@ -174,6 +193,7 @@ public sealed class LaunchOrchestrator : IDisposable
         }
         finally
         {
+            StopHotPlugEnforcer();
             try { watcher?.Stop(); watcher?.Dispose(); } catch { }
             // Always clean up the HidHide session — even if the flow threw or was cancelled
             // mid-way (e.g. game launch timeout). Prevents stale session blacklist state.
@@ -231,6 +251,7 @@ public sealed class LaunchOrchestrator : IDisposable
         }
 
         _sessionHiddenIds = new HashSet<string>(toHide, StringComparer.OrdinalIgnoreCase);
+        _sessionKeepIds   = new HashSet<string>(keepIds, StringComparer.OrdinalIgnoreCase);
 
         Log($"Hiding {toHide.Count} device(s) (all except {keepIds.Count} always-visible)...");
         _hidHide.BeginGameSession(toHide, keepIds, profile.GameExecutablePath);
@@ -552,12 +573,20 @@ public sealed class LaunchOrchestrator : IDisposable
                 revealed.Add(id);
             lastRevealAtMs = targetAtMs;
 
-            // Remaining = everything that was hidden at session start, minus what's revealed so far.
-            // This preserves unassigned and Always-Hidden devices as hidden throughout.
-            var remaining = _sessionHiddenIds
-                .Where(id => !revealed.Contains(id))
-                .ToList();
-            _hidHide.UpdateSessionBlacklist(remaining);
+            // Lock around the read of _sessionHiddenIds + the HidHide update so
+            // we don't race the hot-plug enforcer (which also mutates the set
+            // and pushes blacklist updates). Without this the two could
+            // alternately stomp each other.
+            lock (_sessionStateLock)
+            {
+                // Remaining = everything currently in the session hide set, minus what's revealed so far.
+                // _sessionHiddenIds may have grown since session start if the hot-plug enforcer caught
+                // new devices — they should stay hidden through the reveal phase too.
+                var remaining = _sessionHiddenIds
+                    .Where(id => !revealed.Contains(id))
+                    .ToList();
+                _hidHide.UpdateSessionBlacklist(remaining);
+            }
         }
 
         Log("All Reveal-After-Start devices revealed.");
@@ -570,6 +599,89 @@ public sealed class LaunchOrchestrator : IDisposable
         State = OrchestratorState.Monitoring;
         try { await Task.Delay(Timeout.Infinite, ct); }
         catch (OperationCanceledException) { }
+    }
+
+    // ── Hot-plug enforcer ────────────────────────────────────────────────────
+    //
+    // The allow list (keepIds) is the contract for a session — anything not on
+    // it should be hidden. The initial HideDevices() call only catches devices
+    // present at session start; this background loop re-enumerates every ~1s
+    // and hides any new HID that arrives later (USB plug-in, Bluetooth pair,
+    // virtual device created by another app, etc.) by appending to the session
+    // blacklist via UpdateSessionBlacklist.
+    //
+    // Pre-existing safeguards apply: keyboards/mice and devices with no inputs
+    // are never added (same predicates as HideDevices).
+
+    private void StartHotPlugEnforcer(CancellationToken parentCt)
+    {
+        _hotPlugCts = CancellationTokenSource.CreateLinkedTokenSource(parentCt);
+        var ct = _hotPlugCts.Token;
+        _hotPlugTask = Task.Run(async () =>
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(1000, ct);
+                    EnforceHotPlug();
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    Logger.WriteException("HotPlugEnforcer", ex);
+                }
+            }
+        }, ct);
+    }
+
+    private void StopHotPlugEnforcer()
+    {
+        try { _hotPlugCts?.Cancel(); } catch { }
+        try { _hotPlugTask?.Wait(2000); } catch { }
+        _hotPlugCts?.Dispose();
+        _hotPlugCts  = null;
+        _hotPlugTask = null;
+    }
+
+    private void EnforceHotPlug()
+    {
+        if (!_hidHide.IsAvailable) return;
+
+        var current = _enumerator.GetAll(showAllHid: true);
+        var newlyHidden = new List<HidDevice>();
+
+        lock (_sessionStateLock)
+        {
+            foreach (var d in current)
+            {
+                // Same filters as HideDevices — never touch KB/M, never touch
+                // input-less devices (USB hubs that advertise as HID, audio, etc.)
+                if (d.IsKeyboardOrMouse) continue;
+                if (d.AxisCount == 0 && d.ButtonCount == 0) continue;
+                if (_sessionKeepIds.Contains(d.InstanceId)) continue;
+
+                // Expand to every sibling HID interface so composite controllers
+                // get every child added, matching HideDevices's expansion.
+                var ids = d.ChildInstanceIds.Count > 0
+                    ? d.ChildInstanceIds
+                    : (IReadOnlyList<string>)[d.InstanceId];
+
+                bool anyNew = false;
+                foreach (var id in ids)
+                {
+                    if (_sessionKeepIds.Contains(id)) continue;
+                    if (_sessionHiddenIds.Add(id)) anyNew = true;
+                }
+                if (anyNew) newlyHidden.Add(d);
+            }
+
+            if (newlyHidden.Count == 0) return;
+            _hidHide.UpdateSessionBlacklist(_sessionHiddenIds);
+        }
+
+        var names = string.Join(", ", newlyHidden.Select(d => d.FriendlyName));
+        Log($"Hot-plug: hiding {newlyHidden.Count} new device(s) — {names}");
     }
 
     // ── Phase 5: monitor until exit ──────────────────────────────────────────────

@@ -197,7 +197,7 @@ public sealed class GamesViewModel : ViewModelBase
         }, _ => _selectedProfile is not null);
 
         // Companion to Copy launch command: profile-agnostic restore command
-        // for Sunshine's Undo Command field. No profile id required — it
+        // for Sunshine/Apollo's Undo Command field. No profile id required — it
         // restores whatever orchestrator session is currently active.
         CopyRestoreCommandCommand = new RelayCommand(_ =>
         {

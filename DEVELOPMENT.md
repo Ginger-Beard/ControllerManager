@@ -245,7 +245,7 @@ this filter doesn't require re-opening HID descriptors at session start.
 3. **Other PC games with controllers** — gamepad = AlwaysVisible, sim rig
    not added to the profile. No RevealAfterStart entries; orchestrator
    skips wait+reveal.
-4. **Sunshine / Apollo streaming** — virtual gamepad = AlwaysVisible (build the
+4. **Sunshine/Apollo streaming** — virtual gamepad = AlwaysVisible (build the
    profile while a remote session is active so the dynamic device appears in
    the picker), physical controllers not added.
 
@@ -769,7 +769,7 @@ first run.
   per game.
 - **Broad hide list**: confirm Logger output during `BeginGameSession`
   includes off-spec sim devices (SIMAGIC handbrake, etc.) in the hide list.
-- **Sunshine / Apollo**: build a profile while a remote session is active;
+- **Sunshine/Apollo**: build a profile while a remote session is active;
   verify the virtual gamepad shows up in the picker; verify physical
   controllers stay hidden during the stream.
 - **Profile ID healing**: cause a device's instance ID to change (USB reseat,

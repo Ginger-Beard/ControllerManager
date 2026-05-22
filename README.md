@@ -188,22 +188,42 @@ Hide everything except the gamepad for that one game.
 That's the whole profile. No reveal step, no timing — the gamepad is just the only
 thing the game sees, start to finish.
 
-### ④ "I stream games to my couch / phone with Sunshine or Apollo"
+### ④ "I stream games to my couch / phone with Sunshine/Apollo"
 
 The remote client's input shows up on the host as a *virtual gamepad* (created by
 ViGEm). If the host has physical controllers plugged in, the game might assign
 them slots ahead of the virtual one — and your remote controls do nothing.
 
 1. **Start a remote session first** so the virtual gamepad is present in the
-   device picker.
+   device picker. If you're doing couch co-op or remote play from multiple
+   clients (handheld + TV, etc.), connect **all** of them now — each client
+   shows up as its own virtual gamepad.
 2. **Games tab → New profile** — name it after the game.
-3. Add the **virtual gamepad** → **Always Visible**.
+3. Add the **virtual gamepad(s)** → **Always Visible**. Add one for each
+   client you want to allow.
 4. Don't add anything else. *(Physical controllers stay hidden by default.)*
 5. **Leave the Game executable field blank.** Sunshine/Apollo launches the
    game itself — Controller Manager just needs to hide and reveal devices
    around it. (Auto-trigger grays out; that's expected — this profile fires
    only via the launch command below.)
 6. **Save Profile**.
+
+> **Heads up — the allow list is strict.** Anything not in the profile is
+> hidden, and Controller Manager keeps it that way for the whole session.
+> That includes devices that show up *after* the session starts:
+>
+> - Pick up a physical controller at your desk mid-stream → it gets hidden
+>   within ~1 second. (This is the fix for the "phantom slot" bug.)
+> - A different Moonlight/Artemis client connects mid-stream (or you stop
+>   and start a new client) → its new virtual gamepad isn't in the profile,
+>   so it gets hidden too. If you want that client to play, add its virtual
+>   gamepad to the profile while it's connected, then save.
+>
+> Add every client / controller you want to allow **before** saving the
+> profile. Auto-allowing all virtual gamepads sounds tempting but breaks the
+> "what's in the profile is what gets through" contract — and rules out
+> legitimate cases like "block my kid's TV client while I'm streaming to
+> the handheld."
 
 Then in Sunshine/Apollo: **Configuration → Applications → Edit your game →
 Command Preparations**. That section has three columns: **Do command**,
@@ -223,7 +243,7 @@ same Undo command works across all your streaming apps.
 If you're running the **default Big Picture / Desktop app** instead of a
 game-specific app, add the Command Preparations row **after** the existing
 default entry, not in place of it. *(Order matters here — needs one more round
-of testing on real Sunshine configs; if you hit a snag, mention it in an
+of testing on real Sunshine/Apollo configs; if you hit a snag, mention it in an
 issue.)*
 
 ---

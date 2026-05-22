@@ -29,6 +29,7 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
 
                             <!-- Profile picker -->
@@ -40,35 +41,44 @@
                                       DisplayMemberPath="Name"
                                       Margin="0,0,8,0"/>
 
-                            <!-- Launch / Restore buttons. Launch's tooltip swaps
-                                 to an explanation when the selected profile has
-                                 no exe (in that case it's only usable via the
-                                 launch CLI command, for Sunshine/Apollo). -->
+                            <!-- Launch / Restore buttons. -->
                             <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
-                                <Button Command="{Binding LaunchCommand}"
+                                <Button Content="🎮  Launch"
+                                        Command="{Binding LaunchCommand}"
                                         Padding="16,6" FontSize="13"
                                         Background="#3CB371" Foreground="White"
-                                        ToolTipService.ShowOnDisabled="True">
-                                    <Button.Style>
-                                        <Style TargetType="Button">
-                                            <Setter Property="Content" Value="🎮  Launch"/>
-                                            <Setter Property="ToolTip" Value="Launch this profile (hide + reveal devices, start the game)."/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding SelectedProfileHasExe}" Value="False">
-                                                    <Setter Property="ToolTip" Value="This profile has no game executable set, so it can only be fired from a streaming host (Sunshine/Apollo) using &quot;ControllerManager.exe --launch &lt;id&gt;&quot;. Use Copy launch command in the Games tab."/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Button.Style>
-                                </Button>
+                                        ToolTip="Launch this profile — hide devices, run the reveal sequence, and (if an exe is set) start the game."/>
                                 <Button Content="Restore"
                                         Command="{Binding RestoreCommand}"
                                         Padding="10,6" Margin="6,0,0,0"
-                                        ToolTip="Stop any running flow and re-enable all devices"/>
+                                        ToolTip="Stop the running session and re-enable all devices."/>
                             </StackPanel>
 
-                            <!-- Status -->
+                            <!-- Hint shown only when the selected profile has no exe.
+                                 Tells the user that Launch just hides devices and
+                                 they'll need Restore (or the restore CLI command) to
+                                 end the session manually, since there's no game
+                                 process to end it. -->
                             <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                                       Margin="0,6,0,0" TextWrapping="Wrap"
+                                       Foreground="#8B6914" FontSize="11">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedProfileHasExe}" Value="False">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                                <Run FontWeight="SemiBold">No game executable on this profile:</Run>
+                                This profile will run system wide, click
+                                <Run FontWeight="SemiBold">Restore</Run> to turn it off.
+                            </TextBlock>
+
+                            <!-- Status -->
+                            <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
                                        Text="{Binding StatusText}"
                                        Foreground="Gray" Margin="0,6,0,0"/>
                         </Grid>

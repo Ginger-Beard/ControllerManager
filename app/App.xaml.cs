@@ -127,7 +127,7 @@ public partial class App : Application
 
             // --restore as the first/only instance: nothing to restore (the
             // orchestrator is fresh). Exit silently rather than pop the window
-            // — Sunshine fires --restore at every session end and we don't
+            // — Sunshine/Apollo fires --restore at every session end and we don't
             // want a stray UI flash if CM happened to not be running.
             if (args.Length > 0 && args[0] == "--restore")
             {
