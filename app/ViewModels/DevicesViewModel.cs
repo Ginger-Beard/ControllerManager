@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 using ControllerManager.Models;
 using ControllerManager.Services;
 
@@ -14,11 +15,25 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
     private bool   _showAllHid;
     private bool   _isRefreshing;
+    private bool   _refreshInFlight; // shared stacking guard for user + silent refreshes
     private string _statusText = "Ready.";
     private HidDevice? _selectedDevice;
 
     private HidInputMonitor? _monitor;
     private bool             _isMonitorExpanded;
+
+    // Auto-refresh tick. 2s captures hot-plugs fast enough that a Moonlight/
+    // Artemis client connecting (or a controller picked up at the desk) shows
+    // up in the picker before the user looks for it, without hammering the
+    // HID driver stack. Refresh() short-circuits if one is already in flight,
+    // so a slow enumeration won't stack ticks. MergeDevices fires
+    // CollectionChanged only on actual adds/removes, so the picker rebuild
+    // (ProfileEditorViewModel listens on this) doesn't fire every 2s — only
+    // when devices actually changed.
+    private readonly DispatcherTimer _autoRefresh = new()
+    {
+        Interval = TimeSpan.FromSeconds(2),
+    };
 
     public ObservableCollection<HidDevice>       Devices { get; } = [];
     public ObservableCollection<AxisViewModel>   Axes    { get; } = [];
@@ -102,12 +117,29 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
             p => CopyToClipboard((p as HidDevice ?? SelectedDevice)?.DeviceInterfacePath));
 
         Refresh();
+
+        _autoRefresh.Tick += (_, _) => { if (!_refreshInFlight) Refresh(silent: true); };
+        _autoRefresh.Start();
     }
 
-    public void Refresh()
+    public void Refresh() => Refresh(silent: false);
+
+    // silent=true keeps both StatusText and IsRefreshing untouched so the 2s
+    // auto-refresh doesn't (a) flicker "Scanning devices..." into the user's
+    // face nor (b) flip the Refresh button's enabled state on every tick.
+    // Errors still surface either way — silent failures during auto-refresh
+    // would be worse. _refreshInFlight gates both user and silent refreshes,
+    // preventing two refreshes from overlapping regardless of who triggered.
+    private void Refresh(bool silent)
     {
-        IsRefreshing = true;
-        StatusText   = "Scanning devices...";
+        if (_refreshInFlight) return; // defensive — tick handler already checks
+        _refreshInFlight = true;
+
+        if (!silent)
+        {
+            IsRefreshing = true;
+            StatusText   = "Scanning devices...";
+        }
 
         Task.Run(() =>
         {
@@ -131,16 +163,21 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
                 Application.Current.Dispatcher.Invoke(() =>
                 {
                     MergeDevices(list);
-                    StatusText   = $"{list.Count} device(s) found.";
-                    IsRefreshing = false;
+                    if (!silent)
+                    {
+                        StatusText   = $"{list.Count} device(s) found.";
+                        IsRefreshing = false;
+                    }
+                    _refreshInFlight = false;
                 });
             }
             catch (Exception ex)
             {
                 Application.Current.Dispatcher.Invoke(() =>
                 {
-                    StatusText   = $"Error: {ex.Message}";
-                    IsRefreshing = false;
+                    StatusText = $"Error: {ex.Message}";
+                    if (!silent) IsRefreshing = false;
+                    _refreshInFlight = false;
                 });
             }
         });
@@ -357,5 +394,9 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
         _stickAxisIndexes.Clear();
     }
 
-    public void Dispose() => StopMonitor();
+    public void Dispose()
+    {
+        _autoRefresh.Stop();
+        StopMonitor();
+    }
 }

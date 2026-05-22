@@ -11,9 +11,10 @@ public sealed class GamesViewModel : ViewModelBase
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
-    private readonly ProfileStore     _store;
-    private readonly List<Profile>    _profiles;
-    private readonly DevicesViewModel _devices;
+    private readonly ProfileStore       _store;
+    private readonly List<Profile>      _profiles;
+    private readonly DevicesViewModel   _devices;
+    private readonly LaunchOrchestrator _orchestrator;
 
     private Profile? _selectedProfile;
     private bool     _hasSelection;
@@ -105,11 +106,12 @@ public sealed class GamesViewModel : ViewModelBase
     public ICommand ExportProfileCommand           { get; }
     public ICommand ImportProfileCommand           { get; }
 
-    public GamesViewModel(ProfileStore store, DevicesViewModel devices)
+    public GamesViewModel(ProfileStore store, DevicesViewModel devices, LaunchOrchestrator orchestrator)
     {
-        _store    = store;
-        _devices  = devices;
-        _profiles = store.Load();
+        _store        = store;
+        _devices      = devices;
+        _orchestrator = orchestrator;
+        _profiles     = store.Load();
         Editor        = new ProfileEditorViewModel(devices.Devices, devices.Enumerator);
 
         foreach (var p in _profiles) Profiles.Add(p);
@@ -162,6 +164,10 @@ public sealed class GamesViewModel : ViewModelBase
             // Name may have changed — the .lnk paths are name-derived, so
             // recompute which shortcuts exist for the *new* name.
             RefreshShortcutState();
+            // If this profile is currently running (Sunshine/Apollo session,
+            // Dashboard test launch, etc.), re-apply the new allow list so
+            // newly-added devices unhide immediately. No-op when idle.
+            _orchestrator.ReapplyActiveProfile(updated);
         }, _ => _selectedProfile is not null && Editor.IsDirty);
 
         BrowseExeCommand = new RelayCommand(_ =>

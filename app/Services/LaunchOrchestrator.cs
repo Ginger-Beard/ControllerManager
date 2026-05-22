@@ -100,6 +100,56 @@ public sealed class LaunchOrchestrator : IDisposable
         _cts?.Dispose();
     }
 
+    /// <summary>
+    /// Re-applies the keep/hide allow-list against the live device set for the
+    /// currently active session. Called when the user saves a profile while
+    /// it's running — so newly-added KeepEnabled entries (e.g., a Moonlight/
+    /// Artemis client's virtual gamepad they just connected) unhide
+    /// immediately, and freshly removed ones get re-hidden. No-op if the
+    /// passed profile is not the active one (or no session is active).
+    ///
+    /// <para>What this DOES NOT touch:</para>
+    /// <list type="bullet">
+    ///   <item>The reveal-after-start queue. If a flow is mid-reveal, the
+    ///     reveal loop continues with its captured DisableThenRestore list
+    ///     from RunFlow entry. Edge case; mostly irrelevant for the typical
+    ///     no-exe streaming case where there are no reveals.</item>
+    ///   <item><c>GameExecutablePath</c>. Inverse-mode whitelist (set during
+    ///     BeginGameSession) stays as it was — swapping which game is
+    ///     denied mid-session isn't a real use case.</item>
+    /// </list>
+    /// </summary>
+    public void ReapplyActiveProfile(Profile updated)
+    {
+        if (ActiveProfile is null || ActiveProfile.Id != updated.Id) return;
+        if (!_hidHide.IsAvailable) return;
+
+        // Same predicates as HideDevices — keep the rules in lockstep so
+        // a save-while-running yields the same hide set as a fresh launch.
+        var allDevices = _enumerator.GetAll(showAllHid: true);
+        var keepIds    = ExpandToChildren(updated.KeepEnabled.Select(d => d.InstanceId), allDevices);
+        var toHide     = allDevices
+            .Where(d => !keepIds.Contains(d.InstanceId))
+            .Where(d => !d.IsKeyboardOrMouse)
+            .Where(d => d.AxisCount > 0 || d.ButtonCount > 0)
+            .SelectMany(d => d.ChildInstanceIds.Count > 0 ? d.ChildInstanceIds : [d.InstanceId])
+            .ToList();
+
+        lock (_sessionStateLock)
+        {
+            // Replace the session state wholesale rather than computing deltas
+            // here. UpdateSessionBlacklist already diffs the new set against
+            // _sessionIds (in HidHideClient) and emits the right SetBlacklist
+            // call, so we just hand it the new "what should be hidden right now."
+            _sessionKeepIds   = new HashSet<string>(keepIds, StringComparer.OrdinalIgnoreCase);
+            _sessionHiddenIds = new HashSet<string>(toHide,  StringComparer.OrdinalIgnoreCase);
+            ActiveProfile     = updated;
+            _hidHide.UpdateSessionBlacklist(_sessionHiddenIds);
+        }
+
+        Log($"Profile updated: {keepIds.Count} allowed, {toHide.Count} hidden.");
+    }
+
     // ── State machine ────────────────────────────────────────────────────────────
 
     private async Task RunFlow(Profile profile, CancellationToken ct)

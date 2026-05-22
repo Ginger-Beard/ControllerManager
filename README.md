@@ -198,6 +198,10 @@ them slots ahead of the virtual one — and your remote controls do nothing.
    device picker. If you're doing couch co-op or remote play from multiple
    clients (handheld + TV, etc.), connect **all** of them now — each client
    shows up as its own virtual gamepad.
+   > **Wiggle a stick or press a button on each client.** Each client's
+   > gamepad won't show up in the picker until you actually use it. The
+   > list refreshes on its own every couple of seconds, so just give it
+   > a nudge and it'll pop in.
 2. **Games tab → New profile** — name it after the game.
 3. Add the **virtual gamepad(s)** → **Always Visible**. Add one for each
    client you want to allow.
