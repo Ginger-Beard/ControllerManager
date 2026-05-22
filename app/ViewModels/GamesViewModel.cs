@@ -17,6 +17,8 @@ public sealed class GamesViewModel : ViewModelBase
 
     private Profile? _selectedProfile;
     private bool     _hasSelection;
+    private bool     _hasDesktopShortcut;
+    private bool     _hasStartMenuShortcut;
     private string   _healStatusText = "";
 
     public ObservableCollection<Profile> Profiles { get; } = [];
@@ -50,6 +52,7 @@ public sealed class GamesViewModel : ViewModelBase
 
                     Editor.LoadProfile(value);
                 }
+                RefreshShortcutState();
             }
         }
     }
@@ -60,6 +63,34 @@ public sealed class GamesViewModel : ViewModelBase
         private set => Set(ref _hasSelection, value);
     }
 
+    // Drives the Desktop / Start Menu buttons' toggle behaviour (Create vs
+    // Remove) via DataTriggers in GamesView.xaml. Path is computed from the
+    // persisted profile name, so unsaved name edits in the editor don't flip
+    // the buttons until the user actually saves.
+    public bool HasDesktopShortcut
+    {
+        get => _hasDesktopShortcut;
+        private set => Set(ref _hasDesktopShortcut, value);
+    }
+
+    public bool HasStartMenuShortcut
+    {
+        get => _hasStartMenuShortcut;
+        private set => Set(ref _hasStartMenuShortcut, value);
+    }
+
+    private void RefreshShortcutState()
+    {
+        if (_selectedProfile is null)
+        {
+            HasDesktopShortcut   = false;
+            HasStartMenuShortcut = false;
+            return;
+        }
+        HasDesktopShortcut   = File.Exists(ShortcutExporter.DesktopPath(_selectedProfile.Name));
+        HasStartMenuShortcut = File.Exists(ShortcutExporter.StartMenuPath(_selectedProfile.Name));
+    }
+
     public ProfileEditorViewModel  Editor        { get; }
 
     public ICommand NewProfileCommand              { get; }
@@ -67,8 +98,10 @@ public sealed class GamesViewModel : ViewModelBase
     public ICommand SaveProfileCommand             { get; }
     public ICommand BrowseExeCommand               { get; }
     public ICommand CopySteamCommandCommand        { get; }
-    public ICommand CreateDesktopShortcutCommand   { get; }
-    public ICommand CreateStartMenuShortcutCommand { get; }
+    public ICommand CopyLaunchCommandCommand       { get; }
+    public ICommand CopyRestoreCommandCommand      { get; }
+    public ICommand ToggleDesktopShortcutCommand   { get; }
+    public ICommand ToggleStartMenuShortcutCommand { get; }
     public ICommand ExportProfileCommand           { get; }
     public ICommand ImportProfileCommand           { get; }
 
@@ -126,6 +159,9 @@ public sealed class GamesViewModel : ViewModelBase
             HasSelection = true;
             _store.Save(_profiles);
             Editor.LoadProfile(updated); // clears IsDirty
+            // Name may have changed — the .lnk paths are name-derived, so
+            // recompute which shortcuts exist for the *new* name.
+            RefreshShortcutState();
         }, _ => _selectedProfile is not null && Editor.IsDirty);
 
         BrowseExeCommand = new RelayCommand(_ =>
@@ -148,39 +184,35 @@ public sealed class GamesViewModel : ViewModelBase
             Clipboard.SetText(cmd);
         }, _ => _selectedProfile is not null);
 
-        CreateDesktopShortcutCommand = new RelayCommand(_ =>
+        // For Sunshine/Apollo (or any external launcher): one click puts the
+        // exact "<exe>" --launch <guid> command on the clipboard. Beats asking
+        // the user to export a .lnk and read the command line out of it.
+        CopyLaunchCommandCommand = new RelayCommand(_ =>
         {
             if (_selectedProfile is null) return;
-            try
-            {
-                var path = ShortcutExporter.DesktopPath(_selectedProfile.Name);
-                ShortcutExporter.CreateShortcut(path, _selectedProfile.Id, _selectedProfile.GameExecutablePath);
-                MessageBox.Show($"Shortcut created:\n{path}", "Controller Manager",
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Failed: {ex.Message}", "Controller Manager",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+            var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName
+                   ?? "ControllerManager.exe";
+            var cmd = $"\"{exe}\" --launch {_selectedProfile.Id}";
+            Clipboard.SetText(cmd);
         }, _ => _selectedProfile is not null);
 
-        CreateStartMenuShortcutCommand = new RelayCommand(_ =>
+        // Companion to Copy launch command: profile-agnostic restore command
+        // for Sunshine's Undo Command field. No profile id required — it
+        // restores whatever orchestrator session is currently active.
+        CopyRestoreCommandCommand = new RelayCommand(_ =>
         {
-            if (_selectedProfile is null) return;
-            try
-            {
-                var path = ShortcutExporter.StartMenuPath(_selectedProfile.Name);
-                ShortcutExporter.CreateShortcut(path, _selectedProfile.Id, _selectedProfile.GameExecutablePath);
-                MessageBox.Show($"Shortcut created:\n{path}", "Controller Manager",
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Failed: {ex.Message}", "Controller Manager",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }, _ => _selectedProfile is not null);
+            var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName
+                   ?? "ControllerManager.exe";
+            var cmd = $"\"{exe}\" --restore";
+            Clipboard.SetText(cmd);
+        });
+
+        // Shortcuts only make sense when the profile actually launches a game —
+        // a .lnk for a no-exe (Sunshine/Apollo) profile would just trigger the
+        // hide phase and dangle there waiting for --restore, which is confusing.
+        // Keep CanExecute gated on the exe being set.
+        ToggleDesktopShortcutCommand   = MakeShortcutToggleCommand(ShortcutExporter.DesktopPath,   "desktop");
+        ToggleStartMenuShortcutCommand = MakeShortcutToggleCommand(ShortcutExporter.StartMenuPath, "Start Menu");
 
         ExportProfileCommand = new RelayCommand(_ =>
         {
@@ -232,6 +264,45 @@ public sealed class GamesViewModel : ViewModelBase
             }
         });
     }
+
+    // Builds one of the toggle commands. If the .lnk exists, the command
+    // removes it; otherwise it creates one. Either way it refreshes the Has*
+    // flag the XAML binds to so the button label flips immediately.
+    private RelayCommand MakeShortcutToggleCommand(Func<string, string> pathFor, string locationLabel) =>
+        new(_ =>
+        {
+            if (_selectedProfile is null) return;
+            var path = pathFor(_selectedProfile.Name);
+
+            if (File.Exists(path))
+            {
+                try
+                {
+                    ShortcutExporter.RemoveShortcut(path);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Could not remove the {locationLabel} shortcut:\n{ex.Message}",
+                        "Controller Manager", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                RefreshShortcutState();
+                return;
+            }
+
+            try
+            {
+                ShortcutExporter.CreateShortcut(path, _selectedProfile.Id, _selectedProfile.GameExecutablePath);
+                MessageBox.Show($"Shortcut created:\n{path}", "Controller Manager",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed: {ex.Message}", "Controller Manager",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            RefreshShortcutState();
+        }, _ => _selectedProfile is not null
+             && !string.IsNullOrWhiteSpace(_selectedProfile.GameExecutablePath));
 
     /// <summary>
     /// Returns the name of another auto-triggered profile that shares the given

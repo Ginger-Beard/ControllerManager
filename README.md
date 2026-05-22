@@ -199,16 +199,32 @@ them slots ahead of the virtual one — and your remote controls do nothing.
 2. **Games tab → New profile** — name it after the game.
 3. Add the **virtual gamepad** → **Always Visible**.
 4. Don't add anything else. *(Physical controllers stay hidden by default.)*
-5. **Save Profile**.
+5. **Leave the Game executable field blank.** Sunshine/Apollo launches the
+   game itself — Controller Manager just needs to hide and reveal devices
+   around it. (Auto-trigger grays out; that's expected — this profile fires
+   only via the launch command below.)
+6. **Save Profile**.
 
-Then in Sunshine: **Configuration → Applications → Edit your game**.
+Then in Sunshine/Apollo: **Configuration → Applications → Edit your game →
+Command Preparations**. That section has three columns: **Do command**,
+**Undo command**, and **Elevated** (a checkbox).
 
-- **Command Preparations → cmd (blocking)** = `"C:\path\to\ControllerManager.exe" --launch <profileId>`
-- **Detach Command** = same, or rely on the process watcher.
+| Column | What to paste |
+|---|---|
+| **Do command** | the **Copy launch command** button output (`"…\ControllerManager.exe" --launch <profileId>`) |
+| **Undo command** | the **Copy restore command** button output (`"…\ControllerManager.exe" --restore`) |
+| **Elevated** | ✅ **checked** — Controller Manager needs admin to drive HidHide |
 
-The easiest way to get the right `--launch <profileId>` command is to use the
-**Desktop** or **Start Menu** shortcut button in the Games tab — the exported
-`.lnk` has the full command line inside it.
+Both buttons live in the Games tab and put the exact command (absolute exe
+path, correct profile id) on your clipboard. Note `--restore` takes no
+arguments — it always restores whichever profile is currently active, so the
+same Undo command works across all your streaming apps.
+
+If you're running the **default Big Picture / Desktop app** instead of a
+game-specific app, add the Command Preparations row **after** the existing
+default entry, not in place of it. *(Order matters here — needs one more round
+of testing on real Sunshine configs; if you hit a snag, mention it in an
+issue.)*
 
 ---
 

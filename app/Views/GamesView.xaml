@@ -85,13 +85,27 @@
                     </DockPanel>
                 </Grid>
 
-                <!-- Auto-trigger toggle (per-profile) -->
+                <!-- Auto-trigger toggle (per-profile) — grays out when there's
+                     no exe, since the process watcher has nothing to match on.
+                     The hint below explains the resulting launch-command-only
+                     mode (Sunshine/Apollo use case). -->
                 <CheckBox Content="Auto-trigger this profile when the game launches"
                           IsChecked="{Binding Editor.ProcessWatcherEnabled}"
+                          IsEnabled="{Binding Editor.HasExePath}"
                           Click="AutoTrigger_Click"
                           HorizontalAlignment="Left"
-                          Margin="0,0,0,4"
-                          ToolTip="When on, Controller Manager will detect the game starting and apply this profile automatically. When off, you must launch via the Dashboard, a shortcut, or the Steam wrapper."/>
+                          Margin="0,0,0,4">
+                    <CheckBox.Style>
+                        <Style TargetType="CheckBox">
+                            <Setter Property="ToolTip" Value="When on, Controller Manager will detect the game starting and apply this profile automatically. When off, you must launch via the Dashboard, a shortcut, or the Steam wrapper."/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Editor.HasExePath}" Value="False">
+                                    <Setter Property="ToolTip" Value="Auto-trigger needs a game executable to watch for. Set one above to enable this, or leave blank and use the launch command (Sunshine/Apollo)."/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </CheckBox.Style>
+                </CheckBox>
 
                 <!-- Reveal-phase controls — only meaningful when the profile has
                      at least one Reveal After Start device. Everything in here
@@ -402,20 +416,95 @@
 
                 <!-- Left group: shortcuts + steam -->
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button Command="{Binding CreateDesktopShortcutCommand}"
+                    <!-- Desktop toggle: button label + tooltip flip between
+                         Create and Remove based on HasDesktopShortcut. The
+                         command is one toggle command; the view decides what
+                         to display. Disabled when no exe is set — shortcuts
+                         for no-exe profiles would just dangle in hide phase. -->
+                    <Button Command="{Binding ToggleDesktopShortcutCommand}"
                             Padding="8,4"
-                            ToolTip="Create a desktop shortcut that launches this profile directly">
+                            ToolTipService.ShowOnDisabled="True">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="ToolTip" Value="Create a desktop shortcut that launches this profile directly"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasDesktopShortcut}" Value="True">
+                                        <Setter Property="ToolTip" Value="Delete the existing desktop shortcut for this profile"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Editor.HasExePath}" Value="False">
+                                        <Setter Property="ToolTip" Value="Shortcuts need a game executable. This profile is launch-command-only — use Copy launch command instead."/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="🖥" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                            <TextBlock Text="Desktop" VerticalAlignment="Center"/>
+                            <TextBlock VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="Desktop"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasDesktopShortcut}" Value="True">
+                                                <Setter Property="Text" Value="Remove desktop shortcut"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
                         </StackPanel>
                     </Button>
-                    <Button Command="{Binding CreateStartMenuShortcutCommand}"
+                    <Button Command="{Binding ToggleStartMenuShortcutCommand}"
                             Padding="8,4" Margin="6,0,0,0"
-                            ToolTip="Add a shortcut to the Start Menu Programs folder">
+                            ToolTipService.ShowOnDisabled="True">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="ToolTip" Value="Add a shortcut to the Start Menu Programs folder"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasStartMenuShortcut}" Value="True">
+                                        <Setter Property="ToolTip" Value="Remove this profile's shortcut from the Start Menu Programs folder"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Editor.HasExePath}" Value="False">
+                                        <Setter Property="ToolTip" Value="Shortcuts need a game executable. This profile is launch-command-only — use Copy launch command instead."/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="⊞" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                            <TextBlock Text="Start Menu" VerticalAlignment="Center"/>
+                            <TextBlock VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="Start Menu"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasStartMenuShortcut}" Value="True">
+                                                <Setter Property="Text" Value="Remove Start Menu shortcut"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                    </Button>
+                    <!-- For Sunshine / Apollo / Moonlight / any external launcher
+                         that wants to invoke a profile by command line. -->
+                    <Button Command="{Binding CopyLaunchCommandCommand}"
+                            Padding="8,4" Margin="6,0,0,0"
+                            ToolTip="Copy the &quot;ControllerManager.exe&quot; --launch &lt;id&gt; command for this profile.&#x0a;Paste into Sunshine/Apollo's Do command field (Command Preparations).">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="📋" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Copy launch command" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <!-- Profile-agnostic restore command. Goes in Sunshine's
+                         Undo command field so devices are restored when the
+                         streaming session ends. No profile id needed — it
+                         simply ends whatever is currently active. -->
+                    <Button Command="{Binding CopyRestoreCommandCommand}"
+                            Padding="8,4" Margin="6,0,0,0"
+                            ToolTip="Copy the &quot;ControllerManager.exe&quot; --restore command.&#x0a;Paste into Sunshine/Apollo's Undo command field — it restores devices for whatever profile is active (no profile id needed).">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="↩" FontSize="13" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Copy restore command" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
                     <!-- Hidden for now — Steam launch wrapper still triggers UAC on every launch;

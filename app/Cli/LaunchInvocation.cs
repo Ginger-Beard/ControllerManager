@@ -3,9 +3,9 @@ using ControllerManager.Services;
 namespace ControllerManager.Cli;
 
 /// <summary>
-/// Handles --launch &lt;profileId&gt; when this is the first instance.
-/// Finds the profile and starts the orchestrator. The main window
-/// (if shown) will reflect state via the Dashboard VM.
+/// Handles <c>--launch &lt;profileId&gt;</c> when this is the first instance.
+/// Profile-agnostic stop is the separate <c>--restore</c> top-level flag
+/// (see <see cref="RestoreInvocation"/>).
 /// </summary>
 public static class LaunchInvocation
 {

@@ -92,42 +92,64 @@ public sealed class LaunchOrchestrator : IDisposable
     {
         ActiveProfile             = profile;
         _firstDeviceAcquired      = false;
+        _acquisitionWatcherActive = false;
         Logger.Write($"[Orchestrator] RunFlow — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.AcquisitionTrigger}");
 
         FirstDeviceAcquisitionWatcher? watcher = null;
+        var hasExe = !string.IsNullOrWhiteSpace(profile.GameExecutablePath);
 
         try
         {
             HideDevices(profile, ct);
             ct.ThrowIfCancellationRequested();
 
-            var gameProc = await LaunchGame(profile, ct);
-            ct.ThrowIfCancellationRequested();
+            Process? gameProc = null;
+            if (hasExe)
+            {
+                gameProc = await LaunchGame(profile, ct);
+                ct.ThrowIfCancellationRequested();
 
-            // Correct the HidHide deny-list entry with the game's actual kernel NT path.
-            // No-op for normal C:\... paths (already correct); only opens the game process
-            // when Win32ToNtPath couldn't resolve (UNC / WSL paths). Avoids touching
-            // anti-cheat-protected processes unnecessarily.
-            _hidHide.UpdateSessionGameNtPath(gameProc.Id);
+                // Correct the HidHide deny-list entry with the game's actual kernel NT path.
+                // No-op for normal C:\... paths (already correct); only opens the game process
+                // when Win32ToNtPath couldn't resolve (UNC / WSL paths). Avoids touching
+                // anti-cheat-protected processes unnecessarily.
+                _hidHide.UpdateSessionGameNtPath(gameProc.Id);
+            }
+            else
+            {
+                // Sunshine/Apollo path: the streaming host launches the game,
+                // CM is invoked just to hide/reveal. There's no game PID to
+                // wait on or to scope the ETW watcher to — the flow ends when
+                // something calls --restore (Sunshine Undo) or the user clicks
+                // Restore in the Dashboard / End Session in the tray.
+                Log("No game executable configured — hide/reveal-only mode (Sunshine/Apollo). " +
+                    "Fire --restore (or click Restore on the Dashboard) to end this session.");
+            }
 
-            // In acquisition mode, start the ETW watcher before the reveal phase.
-            // RevealDisableThenRestore waits for the watcher's signal (up to 60s)
-            // and then applies the post-acquisition grace before any per-device
-            // timer fires. If the signal never arrives, the orchestrator falls
-            // back to treating per-row times as absolute Timer-mode values for
-            // that session (see RevealDisableThenRestore comment).
-            if (profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened
+            // Acquisition watcher needs a real game PID to filter ETW events.
+            // Without one, Acquisition mode silently degrades to Timer mode for
+            // the reveal phase (see RevealDisableThenRestore).
+            if (gameProc is not null
+                && profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened
                 && profile.DisableThenRestore.Count > 0)
             {
                 watcher = StartAcquisitionWatcher(profile, gameProc.Id);
+                _acquisitionWatcherActive = watcher is not null;
             }
-            else if (Logger.CurrentLevel >= LogLevel.Verbose)
+            else if (gameProc is not null && Logger.CurrentLevel >= LogLevel.Verbose)
             {
                 // Pure observation when verbose+ logging is on: attach a watcher
                 // to every HID device so the log shows exactly when (and by which
                 // process) each one is opened. Doesn't drive any orchestrator
                 // decisions; the signal fires harmlessly.
                 watcher = StartDiagnosticWatcher(gameProc.Id);
+            }
+            else if (gameProc is null
+                && profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened
+                && profile.DisableThenRestore.Count > 0)
+            {
+                Log("Acquisition mode needs a game PID to listen on — falling back to Timer mode for this session. " +
+                    "Set per-device T+Xs times to control reveal timing.");
             }
 
             if (profile.DisableThenRestore.Count > 0)
@@ -136,7 +158,10 @@ public sealed class LaunchOrchestrator : IDisposable
                 ct.ThrowIfCancellationRequested();
             }
 
-            await MonitorUntilExit(profile, gameProc, ct);
+            if (gameProc is not null)
+                await MonitorUntilExit(profile, gameProc, ct);
+            else
+                await WaitUntilCancelled(ct);
         }
         catch (OperationCanceledException)
         {
@@ -273,6 +298,11 @@ public sealed class LaunchOrchestrator : IDisposable
     // ── Acquisition watcher (optional, drives the wait phase in acquisition mode) ───
 
     private bool _firstDeviceAcquired;
+    // True only when a real ETW watcher started for this session. When false,
+    // RevealDisableThenRestore skips the 60s acquisition wait and runs Timer-
+    // mode semantics directly — used for no-exe (Sunshine/Apollo) profiles
+    // where there's no game PID to scope ETW to.
+    private bool _acquisitionWatcherActive;
 
     /// <summary>
     /// Starts the ETW watcher and returns it. The watcher fires
@@ -452,8 +482,13 @@ public sealed class LaunchOrchestrator : IDisposable
         // to this baseline.
         double phaseOffsetMs = 0;
 
-        // ── If Acquisition mode is on, wait for signal + grace upfront ──────
-        if (profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened
+        // ── If Acquisition mode is on AND a watcher is actually listening,
+        //    wait for signal + grace upfront. The watcher flag is false for
+        //    no-exe profiles (Sunshine/Apollo) where there's no game PID to
+        //    scope ETW to — in that case skip straight to Timer-mode semantics
+        //    instead of burning 60s waiting for a signal that can't fire.
+        if (_acquisitionWatcherActive
+            && profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened
             && profile.DisableThenRestore.Count > 0)
         {
             const int SignalTimeoutMs = 60_000;
@@ -526,6 +561,15 @@ public sealed class LaunchOrchestrator : IDisposable
         }
 
         Log("All Reveal-After-Start devices revealed.");
+    }
+
+    // No-exe session-end: nothing to poll, just block until the orchestrator
+    // is told to stop (--restore, Dashboard Restore button, tray End Session).
+    private async Task WaitUntilCancelled(CancellationToken ct)
+    {
+        State = OrchestratorState.Monitoring;
+        try { await Task.Delay(Timeout.Infinite, ct); }
+        catch (OperationCanceledException) { }
     }
 
     // ── Phase 5: monitor until exit ──────────────────────────────────────────────

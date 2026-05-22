@@ -31,7 +31,18 @@ public sealed class ProfileEditorViewModel : ViewModelBase
     public string ExePath
     {
         get => _exePath;
-        set { Set(ref _exePath, value); ExeName = Path.GetFileName(value); IsDirty = true; }
+        set
+        {
+            if (Set(ref _exePath, value))
+            {
+                ExeName = Path.GetFileName(value);
+                IsDirty = true;
+                // Drives the auto-trigger / Launch / shortcut button enabled
+                // states. Profiles with no exe are launch-command-only
+                // (Sunshine/Apollo).
+                OnPropertyChanged(nameof(HasExePath));
+            }
+        }
     }
 
     public string ExeName
@@ -39,6 +50,8 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         get => _exeName;
         private set => Set(ref _exeName, value);
     }
+
+    public bool HasExePath => !string.IsNullOrWhiteSpace(_exePath);
 
     public bool ProcessWatcherEnabled
     {
@@ -416,6 +429,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(ExePath));
         OnPropertyChanged(nameof(ExeName));
+        OnPropertyChanged(nameof(HasExePath));
         OnPropertyChanged(nameof(ProcessWatcherEnabled));
         OnPropertyChanged(nameof(AcquisitionTrigger));
         OnPropertyChanged(nameof(WaitForFirstDevice));

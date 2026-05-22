@@ -15,10 +15,17 @@ public static class ShortcutExporter
 
         // Make sure the launch task exists / is up to date with the current exe path.
         // Updating the task is cheap (idempotent /Create /F) so we do it every time.
-        if (!LaunchTaskManager.EnsureTaskForProfile(profileId))
+        var (ok, error) = LaunchTaskManager.EnsureTaskForProfile(profileId);
+        if (!ok)
+        {
+            // Pass through whatever schtasks.exe actually said so the user sees
+            // the real reason (access denied, policy block, etc.) instead of
+            // the old "try running as admin once" boilerplate that didn't
+            // actually help when the app already runs elevated.
+            var detail = string.IsNullOrWhiteSpace(error) ? "" : $"\n\n{error}";
             throw new InvalidOperationException(
-                "Could not create the scheduled task that backs this shortcut. " +
-                "Try running Controller Manager as an administrator once to register the task.");
+                "Could not create the scheduled task that backs this shortcut." + detail);
+        }
 
         // schtasks.exe is in System32. Resolve a stable path so the .lnk isn't
         // sensitive to PATH changes when the user is in a different shell.
@@ -51,6 +58,17 @@ public static class ShortcutExporter
         Set("WindowStyle", 7);
 
         st.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, shortcut, null);
+    }
+
+    /// <summary>
+    /// Deletes a previously-exported .lnk. Idempotent — missing file is not an
+    /// error. The per-profile scheduled task is intentionally left in place;
+    /// orphaned tasks are harmless and the other shortcut (desktop vs start
+    /// menu) may still need it. The task is cleaned up on profile delete.
+    /// </summary>
+    public static void RemoveShortcut(string lnkPath)
+    {
+        if (File.Exists(lnkPath)) File.Delete(lnkPath);
     }
 
     public static string DesktopPath(string profileName) =>

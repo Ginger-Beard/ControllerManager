@@ -36,8 +36,21 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
     public Profile? SelectedProfile
     {
         get => _selectedProfile;
-        set { Set(ref _selectedProfile, value); HasSelection = value is not null; }
+        set
+        {
+            if (Set(ref _selectedProfile, value))
+            {
+                HasSelection = value is not null;
+                OnPropertyChanged(nameof(SelectedProfileHasExe));
+            }
+        }
     }
+
+    // Drives the Launch button tooltip + enabled-state on the Dashboard.
+    // No-exe profiles can only be driven by the --launch CLI command, never
+    // the in-app button.
+    public bool SelectedProfileHasExe =>
+        !string.IsNullOrWhiteSpace(_selectedProfile?.GameExecutablePath);
 
     public string StatusText
     {
@@ -85,9 +98,14 @@ public sealed class DashboardViewModel : ViewModelBase, IDisposable
         // (devices plugged/unplugged, or the Devices tab manually refreshes).
         sharedDeviceList.CollectionChanged += (_, _) => RefreshGamingDevices();
 
+        // No-exe profiles (Sunshine/Apollo) can't be launched from the in-app
+        // button — there's nothing for the orchestrator to spawn, and the
+        // session would just dangle until --restore. Those profiles fire only
+        // via "ControllerManager.exe --launch <id>" from the streaming host.
         LaunchCommand = new RelayCommand(
             _ => Launch(),
-            _ => HasSelection && !IsRunning);
+            _ => HasSelection && !IsRunning
+              && !string.IsNullOrWhiteSpace(_selectedProfile?.GameExecutablePath));
 
         RestoreCommand = new RelayCommand(
             _ => _ = _orchestrator.AbortAsync());

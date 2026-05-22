@@ -50,6 +50,13 @@ public sealed class MainViewModel : ViewModelBase
                     System.Windows.Application.Current.Dispatcher.Invoke(
                         () => orchestrator.Start(profile));
             }
+            else if (req.Op == "restore")
+            {
+                // Profile-agnostic stop. Paired with --launch <id> as the
+                // Sunshine/Apollo Undo Command.
+                if (orchestrator.IsRunning)
+                    _ = orchestrator.AbortAsync();
+            }
             else if (req.Op == "steam-wrap")
             {
                 _ = Task.Run(() => SteamWrapInvocation.HandleAsync(

@@ -40,12 +40,27 @@
                                       DisplayMemberPath="Name"
                                       Margin="0,0,8,0"/>
 
-                            <!-- Launch / Restore buttons -->
+                            <!-- Launch / Restore buttons. Launch's tooltip swaps
+                                 to an explanation when the selected profile has
+                                 no exe (in that case it's only usable via the
+                                 launch CLI command, for Sunshine/Apollo). -->
                             <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
-                                <Button Content="🎮  Launch"
-                                        Command="{Binding LaunchCommand}"
+                                <Button Command="{Binding LaunchCommand}"
                                         Padding="16,6" FontSize="13"
-                                        Background="#3CB371" Foreground="White"/>
+                                        Background="#3CB371" Foreground="White"
+                                        ToolTipService.ShowOnDisabled="True">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="Content" Value="🎮  Launch"/>
+                                            <Setter Property="ToolTip" Value="Launch this profile (hide + reveal devices, start the game)."/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SelectedProfileHasExe}" Value="False">
+                                                    <Setter Property="ToolTip" Value="This profile has no game executable set, so it can only be fired from a streaming host (Sunshine/Apollo) using &quot;ControllerManager.exe --launch &lt;id&gt;&quot;. Use Copy launch command in the Games tab."/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
                                 <Button Content="Restore"
                                         Command="{Binding RestoreCommand}"
                                         Padding="10,6" Margin="6,0,0,0"

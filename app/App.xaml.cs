@@ -125,6 +125,16 @@ public partial class App : Application
                 return;
             }
 
+            // --restore as the first/only instance: nothing to restore (the
+            // orchestrator is fresh). Exit silently rather than pop the window
+            // — Sunshine fires --restore at every session end and we don't
+            // want a stray UI flash if CM happened to not be running.
+            if (args.Length > 0 && args[0] == "--restore")
+            {
+                Shutdown(0);
+                return;
+            }
+
             var window = new Views.MainWindow();
             Tray = new Services.TrayService(window, ProfileStore, Orchestrator);
 
@@ -154,6 +164,7 @@ public partial class App : Application
         var req = args[0] switch
         {
             "--launch"     => new IpcRequest { Op = "launch",     Args = args[1..] },
+            "--restore"    => new IpcRequest { Op = "restore",    Args = [] },
             "--steam-wrap" => new IpcRequest { Op = "steam-wrap", Args = args[1..] },
             // --startup from a duplicate scheduled-task trigger — ignore silently
             _              => null,
