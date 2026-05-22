@@ -27,8 +27,9 @@ public enum OrchestratorState
 /// </summary>
 public sealed class LaunchOrchestrator : IDisposable
 {
-    private readonly HidHideClient    _hidHide;
-    private readonly DeviceEnumerator _enumerator;
+    private readonly HidHideClient         _hidHide;
+    private readonly DeviceEnumerator      _enumerator;
+    private readonly DeviceChangeNotifier? _notifier;
 
     private OrchestratorState        _state = OrchestratorState.Idle;
     private CancellationTokenSource? _cts;
@@ -47,10 +48,19 @@ public sealed class LaunchOrchestrator : IDisposable
     // the session blacklist.
     private readonly object _sessionStateLock = new();
 
-    // Hot-plug enforcer plumbing. Started after the initial hide, stopped in
-    // RunFlow's finally before EndGameSession.
-    private CancellationTokenSource? _hotPlugCts;
-    private Task?                    _hotPlugTask;
+    // Hot-plug enforcer plumbing. Pure kernel-notification driven — no
+    // background polling during steady state. _hotPlugHandler subscribes to
+    // DeviceChangeNotifier.DevicesChanged for the duration of a session;
+    // EnforceHotPlug runs only when CfgMgr32 reports an actual change.
+    // If the notifier failed to register at startup, the hot-plug enforcer
+    // is inactive and the user's manual Refresh on the Devices/Profile tabs
+    // is the fallback path.
+    private EventHandler? _hotPlugHandler;
+    // Coalesces overlapping invocations. Notifier callbacks are already
+    // debounced (200ms), but if the user triggers a manual Refresh that
+    // ultimately fires DevicesChanged while a prior enforcement is still
+    // running, this prevents two enumerations in parallel.
+    private int           _enforceInFlight;
 
     /// <summary>The profile currently running; null when idle.</summary>
     public Profile? ActiveProfile { get; private set; }
@@ -66,10 +76,13 @@ public sealed class LaunchOrchestrator : IDisposable
     public event EventHandler<OrchestratorState>? StateChanged;
     public event EventHandler<string>?            ActivityLogged;
 
-    public LaunchOrchestrator(HidHideClient hidHide, DeviceEnumerator? enumerator = null)
+    public LaunchOrchestrator(HidHideClient hidHide,
+                              DeviceEnumerator? enumerator = null,
+                              DeviceChangeNotifier? notifier = null)
     {
         _hidHide    = hidHide;
         _enumerator = enumerator ?? new DeviceEnumerator();
+        _notifier   = notifier;
     }
 
     // ── Public API ───────────────────────────────────────────────────────────────
@@ -170,7 +183,7 @@ public sealed class LaunchOrchestrator : IDisposable
             // Strict allow-list: anything that arrives after this point and
             // isn't in keepIds gets hidden too. Runs until RunFlow's finally
             // cancels it. Composes with the reveal phase via _sessionStateLock.
-            StartHotPlugEnforcer(ct);
+            StartHotPlugEnforcer();
 
             Process? gameProc = null;
             if (hasExe)
@@ -655,43 +668,42 @@ public sealed class LaunchOrchestrator : IDisposable
     //
     // The allow list (keepIds) is the contract for a session — anything not on
     // it should be hidden. The initial HideDevices() call only catches devices
-    // present at session start; this background loop re-enumerates every ~1s
-    // and hides any new HID that arrives later (USB plug-in, Bluetooth pair,
-    // virtual device created by another app, etc.) by appending to the session
-    // blacklist via UpdateSessionBlacklist.
+    // present at session start; this enforcer hides any new HID that arrives
+    // later (USB plug-in, Bluetooth pair, virtual device created by another
+    // app, etc.) by appending to the session blacklist via UpdateSessionBlacklist.
+    //
+    // Trigger source is DeviceChangeNotifier (CM_Register_Notification on the
+    // HID interface class GUID). No background polling — a Moonlight stream
+    // no longer eats HID enumeration every second, which was causing PnP
+    // churn and input lag against ViGEm-backed virtual gamepads.
     //
     // Pre-existing safeguards apply: keyboards/mice and devices with no inputs
     // are never added (same predicates as HideDevices).
 
-    private void StartHotPlugEnforcer(CancellationToken parentCt)
+    private void StartHotPlugEnforcer()
     {
-        _hotPlugCts = CancellationTokenSource.CreateLinkedTokenSource(parentCt);
-        var ct = _hotPlugCts.Token;
-        _hotPlugTask = Task.Run(async () =>
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                try
-                {
-                    await Task.Delay(1000, ct);
-                    EnforceHotPlug();
-                }
-                catch (OperationCanceledException) { break; }
-                catch (Exception ex)
-                {
-                    Logger.WriteException("HotPlugEnforcer", ex);
-                }
-            }
-        }, ct);
+        if (_notifier is null) return;
+
+        _hotPlugHandler = (_, _) => TryEnforce();
+        _notifier.DevicesChanged += _hotPlugHandler;
     }
 
     private void StopHotPlugEnforcer()
     {
-        try { _hotPlugCts?.Cancel(); } catch { }
-        try { _hotPlugTask?.Wait(2000); } catch { }
-        _hotPlugCts?.Dispose();
-        _hotPlugCts  = null;
-        _hotPlugTask = null;
+        if (_notifier is not null && _hotPlugHandler is not null)
+            _notifier.DevicesChanged -= _hotPlugHandler;
+        _hotPlugHandler = null;
+    }
+
+    // Coalesces overlapping notifier callbacks. EnforceHotPlug takes
+    // _sessionStateLock and is idempotent, but running it twice in parallel
+    // doubles the enumeration cost for no benefit.
+    private void TryEnforce()
+    {
+        if (Interlocked.CompareExchange(ref _enforceInFlight, 1, 0) != 0) return;
+        try { EnforceHotPlug(); }
+        catch (Exception ex) { Logger.WriteException("HotPlugEnforcer", ex); }
+        finally { Interlocked.Exchange(ref _enforceInFlight, 0); }
     }
 
     private void EnforceHotPlug()

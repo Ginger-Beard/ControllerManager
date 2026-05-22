@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Input;
-using System.Windows.Threading;
 using ControllerManager.Models;
 using ControllerManager.Services;
 
@@ -9,8 +8,13 @@ namespace ControllerManager.ViewModels;
 
 public sealed class DevicesViewModel : ViewModelBase, IDisposable
 {
-    private readonly DeviceEnumerator _enumerator;
-    private readonly HidHideClient   _hidHide;
+    private readonly DeviceEnumerator       _enumerator;
+    private readonly HidHideClient          _hidHide;
+    private readonly DeviceChangeNotifier?  _notifier;
+    private readonly EventHandler?          _notifierHandler;
+    // Cancellation handle for the post-arrival settling re-tap. See the
+    // double-refresh comment on the notifier subscription below.
+    private CancellationTokenSource?        _settleCts;
     internal DeviceEnumerator Enumerator => _enumerator;
 
     private bool   _showAllHid;
@@ -21,19 +25,6 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
     private HidInputMonitor? _monitor;
     private bool             _isMonitorExpanded;
-
-    // Auto-refresh tick. 2s captures hot-plugs fast enough that a Moonlight/
-    // Artemis client connecting (or a controller picked up at the desk) shows
-    // up in the picker before the user looks for it, without hammering the
-    // HID driver stack. Refresh() short-circuits if one is already in flight,
-    // so a slow enumeration won't stack ticks. MergeDevices fires
-    // CollectionChanged only on actual adds/removes, so the picker rebuild
-    // (ProfileEditorViewModel listens on this) doesn't fire every 2s — only
-    // when devices actually changed.
-    private readonly DispatcherTimer _autoRefresh = new()
-    {
-        Interval = TimeSpan.FromSeconds(2),
-    };
 
     public ObservableCollection<HidDevice>       Devices { get; } = [];
     public ObservableCollection<AxisViewModel>   Axes    { get; } = [];
@@ -88,10 +79,12 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
     public ICommand CopyInstanceIdCommand    { get; }
     public ICommand CopyInterfacePathCommand { get; }
 
-    public DevicesViewModel(DeviceEnumerator enumerator, HidHideClient hidHide)
+    public DevicesViewModel(DeviceEnumerator enumerator, HidHideClient hidHide,
+                            DeviceChangeNotifier? notifier = null)
     {
         _enumerator = enumerator;
         _hidHide    = hidHide;
+        _notifier   = notifier;
 
         RefreshCommand = new RelayCommand(_ => Refresh(), _ => !IsRefreshing);
         CopyAllCommand = new RelayCommand(_ =>
@@ -118,21 +111,65 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
         Refresh();
 
-        _autoRefresh.Tick += (_, _) => { if (!_refreshInFlight) Refresh(silent: true); };
-        _autoRefresh.Start();
+        // Kernel-driven hot-plug instead of a 2s DispatcherTimer poll.
+        // CM_Register_Notification fires on a ThreadPool thread — marshal to
+        // the UI dispatcher before touching observable collections.
+        //
+        // Double-refresh: at the moment PnP fires DEVICEINTERFACEARRIVAL the
+        // HidHide filter hasn't necessarily finished re-applying its blacklist
+        // for the new InstanceId, so GetBlacklist() can miss it and the row
+        // shows IsEnabled=true even when the user has persistently hidden the
+        // device. We do an immediate refresh (responsive UI — the row appears
+        // right away) and a silent re-tap ~750ms later to catch the settled
+        // HidHide state. Back-to-back arrivals cancel any pending re-tap so
+        // only one fires per burst.
+        if (_notifier is not null)
+        {
+            _notifierHandler = (_, _) => Application.Current?.Dispatcher.BeginInvoke(
+                () =>
+                {
+                    if (!_refreshInFlight) Refresh(silent: true);
+                    ScheduleHidHideSettleReRefresh();
+                });
+            _notifier.DevicesChanged += _notifierHandler;
+        }
     }
 
-    public void Refresh() => Refresh(silent: false);
+    private void ScheduleHidHideSettleReRefresh()
+    {
+        _settleCts?.Cancel();
+        _settleCts = new CancellationTokenSource();
+        var ct = _settleCts.Token;
+        _ = Task.Delay(TimeSpan.FromMilliseconds(750), ct).ContinueWith(t =>
+        {
+            if (!t.IsCompletedSuccessfully) return;
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                if (!_refreshInFlight) Refresh(silent: true);
+            });
+        }, TaskScheduler.Default);
+    }
 
-    // silent=true keeps both StatusText and IsRefreshing untouched so the 2s
-    // auto-refresh doesn't (a) flicker "Scanning devices..." into the user's
-    // face nor (b) flip the Refresh button's enabled state on every tick.
-    // Errors still surface either way — silent failures during auto-refresh
-    // would be worse. _refreshInFlight gates both user and silent refreshes,
-    // preventing two refreshes from overlapping regardless of who triggered.
+    // User-initiated refresh: flush the enumerator cache first so we re-probe
+    // every device via CreateFileW. This is the explicit fallback for cases
+    // where cached state doesn't reflect reality (external HidHide GUI edits,
+    // a driver swap, etc.). Auto-refresh (notifier-driven) uses the cache.
+    public void Refresh()
+    {
+        _enumerator.InvalidateAll();
+        Refresh(silent: false);
+    }
+
+    // silent=true keeps both StatusText and IsRefreshing untouched so the
+    // notifier-driven auto-refresh doesn't (a) flicker "Scanning devices..."
+    // into the user's face nor (b) flip the Refresh button's enabled state on
+    // every event. Errors still surface either way — silent failures during
+    // auto-refresh would be worse. _refreshInFlight gates both user and silent
+    // refreshes, preventing two refreshes from overlapping regardless of who
+    // triggered.
     private void Refresh(bool silent)
     {
-        if (_refreshInFlight) return; // defensive — tick handler already checks
+        if (_refreshInFlight) return; // defensive — handler already checks
         _refreshInFlight = true;
 
         if (!silent)
@@ -236,6 +273,13 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
                     else
                         _hidHide.RemoveFromPersistentBlacklist(id);
                 }
+
+                // HidHide flipping access state changes whether CreateFileW
+                // succeeds, but the device's PnP identity hasn't changed —
+                // notifier won't fire, and the cached HidDeviceInfo would
+                // mask the new IsAccessDenied state. Invalidate explicitly
+                // so the next refresh re-probes.
+                _enumerator.Invalidate(ids);
 
                 Application.Current.Dispatcher.Invoke(Refresh);
             }
@@ -396,7 +440,11 @@ public sealed class DevicesViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
-        _autoRefresh.Stop();
+        if (_notifier is not null && _notifierHandler is not null)
+            _notifier.DevicesChanged -= _notifierHandler;
+        _settleCts?.Cancel();
+        _settleCts?.Dispose();
+        _settleCts = null;
         StopMonitor();
     }
 }

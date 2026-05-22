@@ -17,7 +17,7 @@ public sealed class MainViewModel : ViewModelBase
         var orchestrator = App.Orchestrator;
         var enumerator   = new DeviceEnumerator();
 
-        Devices   = new DevicesViewModel(enumerator, App.HidHide);
+        Devices   = new DevicesViewModel(enumerator, App.HidHide, App.DeviceNotifier);
         Games     = new GamesViewModel(App.ProfileStore, Devices, orchestrator);
         Dashboard = new DashboardViewModel(orchestrator, App.ProfileStore, Devices.Devices, enumerator);
         Settings  = new SettingsViewModel(App.SettingsStore);

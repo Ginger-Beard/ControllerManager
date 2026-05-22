@@ -357,13 +357,19 @@
                           ResizeDirection="Rows"
                           ToolTip="Drag to resize the lists above and below"/>
 
-            <!-- ── Picker label + show-all ────────────────────────────────── -->
+            <!-- ── Picker label + show-all + refresh ──────────────────────── -->
             <DockPanel Grid.Row="5" Margin="0,4,0,2">
                 <CheckBox DockPanel.Dock="Right"
                           Content="Show all devices"
                           IsChecked="{Binding Editor.ShowAllHid}"
                           VerticalAlignment="Center"
                           Margin="8,0,0,0"/>
+                <Button DockPanel.Dock="Right"
+                        Content="↻ Refresh"
+                        Command="{Binding Editor.RefreshCommand}"
+                        Padding="6,1" Margin="8,0,0,0"
+                        VerticalAlignment="Center"
+                        ToolTip="Re-scan HID devices. Normally happens automatically when a controller is plugged in or unplugged — use this if a device doesn't appear."/>
                 <TextBlock>
                     <Run Text="Add devices to profile"/>
                     <Run Text=" — Leave here to hide"

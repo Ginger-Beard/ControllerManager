@@ -225,6 +225,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
     public ICommand RemoveCommand   { get; }
     public ICommand MoveUpCommand   { get; }
     public ICommand MoveDownCommand { get; }
+    public ICommand RefreshCommand  { get; }
 
     public ProfileEditorViewModel(ObservableCollection<HidDevice> sharedDeviceList, DeviceEnumerator enumerator)
     {
@@ -266,6 +267,17 @@ public sealed class ProfileEditorViewModel : ViewModelBase
             p => p is DeviceAssignmentViewModel a &&
                  Assignments.IndexOf(a) >= 0 &&
                  Assignments.IndexOf(a) < Assignments.Count - 1);
+
+        // Manual fallback for the rare case where a kernel hot-plug notification
+        // doesn't surface a device (driver weirdness, etc.). The picker normally
+        // updates automatically via DeviceChangeNotifier → DevicesViewModel →
+        // shared collection → RefreshPickerDevices. Invalidates the enumerator
+        // cache first so this really is a full re-probe.
+        RefreshCommand = new RelayCommand(_ =>
+        {
+            _enumerator.InvalidateAll();
+            RefreshPickerDevices();
+        });
 
         RefreshPickerDevices();
     }

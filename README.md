@@ -393,6 +393,12 @@ known-broken list.
   crashed during a session, some session devices are stuck in the global hide
   list. Toggle them back **ON** in the Devices tab.
 
+**Steam pops a "Controller Detected" toast for a device that should be hidden**
+- Steam can still see the device exists, but the game won't get any input from
+  it — that part is working. If the toast bothers you, open Steam → **Settings
+  → Controller**, click the gear next to the device, and turn off **Steam
+  Input**. One-time per device.
+
 **The "Inputs Monitor" doesn't show any axes / buttons**
 - Select a device in the list before expanding the monitor. Some companion apps
   hold devices exclusively — close them temporarily to test.

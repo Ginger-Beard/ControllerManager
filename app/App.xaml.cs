@@ -10,13 +10,14 @@ public partial class App : Application
 {
     private const string MutexName = "Global\\ControllerManager-3F8A1B2C-4D5E-6F7A-8B9C-0D1E2F3A4B5C";
 
-    public static ProfileStore       ProfileStore  { get; private set; } = null!;
-    public static SettingsStore      SettingsStore { get; private set; } = null!;
-    public static AppSettings        Settings      { get; set; }         = null!;
-    public static HidHideClient      HidHide       { get; private set; } = null!;
-    public static LaunchOrchestrator Orchestrator  { get; private set; } = null!;
-    public static IpcServer?         Ipc           { get; private set; }
-    public static TrayService?       Tray          { get; private set; }
+    public static ProfileStore         ProfileStore   { get; private set; } = null!;
+    public static SettingsStore        SettingsStore  { get; private set; } = null!;
+    public static AppSettings          Settings       { get; set; }         = null!;
+    public static HidHideClient        HidHide        { get; private set; } = null!;
+    public static LaunchOrchestrator   Orchestrator   { get; private set; } = null!;
+    public static DeviceChangeNotifier DeviceNotifier { get; private set; } = null!;
+    public static IpcServer?           Ipc            { get; private set; }
+    public static TrayService?         Tray           { get; private set; }
 
     private Mutex? _mutex;
 
@@ -108,9 +109,18 @@ public partial class App : Application
                         { UseShellExecute = true });
             }
 
+            // Single kernel-driven device change notifier. Replaces the old
+            // polling loops in DevicesViewModel and LaunchOrchestrator's
+            // hot-plug enforcer so a Moonlight session no longer hammers HID
+            // every 1–2s. Failure here isn't fatal — manual Refresh on the
+            // Devices/Profile tabs still works, just no auto-refresh.
+            DeviceNotifier = new Services.DeviceChangeNotifier();
+            try { DeviceNotifier.Start(); }
+            catch (Exception ex) { Logger.WriteException("DeviceChangeNotifier.Start", ex); }
+
             // Single orchestrator shared by tray, dashboard, and process watcher.
             // Constructed before MainWindow so MainViewModel can reference it.
-            Orchestrator = new Services.LaunchOrchestrator(HidHide);
+            Orchestrator = new Services.LaunchOrchestrator(HidHide, notifier: DeviceNotifier);
             Orchestrator.ActivityLogged += (_, msg) => Logger.Write(msg);
 
             // ── IPC server ───────────────────────────────────────────────────
@@ -178,6 +188,7 @@ public partial class App : Application
     {
         Tray?.Dispose();
         Ipc?.Dispose();
+        DeviceNotifier?.Dispose();
         HidHide?.EndGameSession();
         try { _mutex?.ReleaseMutex(); } catch (ApplicationException) { }
         _mutex?.Dispose();

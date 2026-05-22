@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -80,6 +81,42 @@ public sealed class DeviceEnumerator
     private static readonly Regex PidRx = new(@"PID_([0-9A-Fa-f]{4})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex MiRx  = new(@"&MI_([0-9A-Fa-f]+)",   RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    // ── Per-device cache ─────────────────────────────────────────────────────────
+    //
+    // Cached entries hold everything QueryHidDeviceInfo extracts via CreateFileW +
+    // HidD_Get*: VID/PID, usage page/usage, vendor/product strings, axis/button
+    // counts, plus the symbolic link and ContainerId. All of these are immutable
+    // for the lifetime of a PnP devnode — they only change when the device is
+    // physically replaced, which means the InstanceId itself changes too.
+    //
+    // The hot path (notifier-triggered EnforceHotPlug, auto-refresh after
+    // hot-plug) reuses cached entries, avoiding a CreateFileW storm on
+    // virtual gamepads (ViGEm/Apollo). HidHide-blocked devices are also cached
+    // as "denied" so we don't reopen them on every call either — the only
+    // legitimate transitions are:
+    //   1. PnP arrival/removal: cache is invalidated by absence on the next pass.
+    //   2. HidHide blacklist toggle from inside this app: ToggleEnabled calls
+    //      Invalidate(ids) so the next refresh re-probes.
+    //   3. External HidHide GUI change: stale until the user clicks Refresh
+    //      (DevicesViewModel/ProfileEditorViewModel.RefreshCommand calls
+    //      InvalidateAll first). Acceptable — external edits are rare.
+    private sealed record CacheEntry(string Link, HidDeviceInfo Info, string? ContainerId);
+
+    private readonly ConcurrentDictionary<string, CacheEntry> _cache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Drop cached state for the given instance IDs. Next GetAll() will
+    /// re-probe via CreateFileW. Used by ToggleEnabled so HidHide reveals/hides
+    /// surface immediately.</summary>
+    public void Invalidate(IEnumerable<string> instanceIds)
+    {
+        foreach (var id in instanceIds) _cache.TryRemove(id, out _);
+    }
+
+    /// <summary>Drop every cached entry. Wired to the user-facing Refresh
+    /// buttons so they always trigger a full re-probe.</summary>
+    public void InvalidateAll() => _cache.Clear();
+
     // ── Public API ────────────────────────────────────────────────────────────────
 
     public List<HidDevice> GetAll(bool showAllHid = false)
@@ -111,17 +148,34 @@ public sealed class DeviceEnumerator
         // grouping (HID.cpp:157 / BlacklistDlg.cpp:300). Devices without a ContainerId
         // (or with GUID_NULL) are treated as standalone — their own instance ID is
         // used as the group key so they still get a row but with no siblings.
+        // ContainerId is immutable per devnode so we read it through the cache.
         var groups = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         foreach (var instanceId in instanceIds)
         {
             if (instanceId.StartsWith("USB\\",  StringComparison.OrdinalIgnoreCase)) continue;
             if (instanceId.StartsWith("ROOT\\", StringComparison.OrdinalIgnoreCase)) continue;
 
-            var key = GetContainerId(instanceId) ?? instanceId;
+            string? containerId;
+            if (_cache.TryGetValue(instanceId, out var cached))
+            {
+                containerId = cached.ContainerId;
+            }
+            else
+            {
+                containerId = GetContainerId(instanceId);
+            }
+
+            var key = containerId ?? instanceId;
             if (!groups.TryGetValue(key, out var list))
                 groups[key] = list = [];
             list.Add(instanceId);
         }
+
+        // Evict cache entries for devnodes no longer present so the cache can't
+        // grow unbounded across a long-running session of plug/unplug cycles.
+        var presentIds = new HashSet<string>(instanceIds, StringComparer.OrdinalIgnoreCase);
+        foreach (var staleId in _cache.Keys.Where(k => !presentIds.Contains(k)).ToList())
+            _cache.TryRemove(staleId, out _);
 
         // Third pass: build a HidDevice per group. The "primary" child is the first
         // gaming HID interface we find with full access (or just the first interface
@@ -129,14 +183,20 @@ public sealed class DeviceEnumerator
         // Hiding writes the whole set; only the primary is opened for capability info.
         foreach (var (_, children) in groups)
         {
-            // Probe each child once. The primary is whichever one looks like a gaming
-            // device (so MI_01 audio/keyboard composites still pick the right interface
-            // for the display row), falling back to the first if none qualify.
+            // Probe each child once, reusing cached state for known devnodes.
+            // The primary is whichever one looks like a gaming device (so MI_01
+            // audio/keyboard composites still pick the right interface for the
+            // display row), falling back to the first if none qualify.
             var probed = children
                 .Select(id =>
                 {
+                    if (_cache.TryGetValue(id, out var hit))
+                        return (Id: id, hit.Link, hit.Info);
+
                     var link = SetupApi.GetSymbolicLink(HidInterfaceGuid, id) ?? HidApi.ToDevicePath(id);
-                    return (Id: id, Link: link, Info: QueryHidDeviceInfo(id, link));
+                    var info = QueryHidDeviceInfo(id, link);
+                    _cache[id] = new CacheEntry(link, info, GetContainerId(id));
+                    return (Id: id, Link: link, Info: info);
                 })
                 .ToList();
 
