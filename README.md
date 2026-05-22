@@ -4,9 +4,6 @@
 that hide unwanted devices, restore FFB to your wheel, and keep your sim rig and
 your gamepad from stepping on each other — built on top of [HidHide](https://github.com/nefarius/HidHide).
 
-> Windows. It works for me — feel free to read the code, improve it, or do it
-> better. PRs welcome. I won't be helping anyone set it up individually.
-
 ---
 
 ## What it actually solves
