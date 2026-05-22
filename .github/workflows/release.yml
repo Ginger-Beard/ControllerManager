@@ -25,6 +25,11 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
+      - name: Get tag commit date
+        id: tagdate
+        shell: bash
+        run: echo "date=$(git log -1 --format=%cd --date=short)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
@@ -58,6 +63,8 @@ jobs:
           generate_release_notes: true
           overwrite_files: true
           body: |
+            > Originally released ${{ steps.tagdate.outputs.date }}
+
             ## Downloads
 
             | File | Description |
