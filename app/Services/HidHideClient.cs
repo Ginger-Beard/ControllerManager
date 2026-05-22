@@ -127,7 +127,7 @@ public sealed class HidHideClient
 
     // ── State machine ─────────────────────────────────────────────────────────────
     //
-    // Two modes, clean transition via ApplyState():
+    // Three modes, clean transition via ApplyState():
     //
     //   No session active:
     //     Active=true (if persistent BL non-empty), Inverse=false,
@@ -135,13 +135,20 @@ public sealed class HidHideClient
     //     → Devices in persistent BL hidden from all processes except CM.
     //     → Nothing to hide: Active=false, Whitelist=[], Inverse=false.
     //
-    //   Session active:
+    //   Session active, game exe known:
     //     Active=true, Inverse=true, Whitelist=[game.exe]
     //     → Only the game is denied. SimHub, Pit House, joy.cpl, any process that
     //       starts during the session: all allowed automatically (not in deny list).
     //       No enumeration, no wildcards needed.
     //     → CM is also not in the deny list, so it retains full access — the user
     //       never needs to know about this.
+    //
+    //   Session active, NO game exe (Sunshine/Apollo):
+    //     Active=true, Inverse=false, Whitelist=[CM only]
+    //     → System-wide hide: everything except CM is denied. We can't scope to
+    //       a single game because the streaming host spawns it, so we trade the
+    //       "everyone else still sees the controllers" property for actually
+    //       hiding from the game (whoever it ends up being).
     //
     // ApplyState() is the ONLY function that writes Active, Whitelist, and Inverse.
     // All callers update their data then call ApplyState(); no scattered state writes.
@@ -150,12 +157,24 @@ public sealed class HidHideClient
     {
         if (_sessionActive)
         {
-            // Inverse mode: deny list = [game.exe]. Everyone else allowed.
-            // CM is not in the deny list so it can always manage devices.
-            var deny = new List<string>();
-            if (!string.IsNullOrEmpty(_sessionGameNtPath)) deny.Add(_sessionGameNtPath);
-            SetWhitelist(deny);
-            SetInverse(true);
+            if (!string.IsNullOrEmpty(_sessionGameNtPath))
+            {
+                // Game-scoped (inverse): deny list = [game.exe] only. CM is not
+                // in the deny list, so it can always manage devices.
+                SetWhitelist([_sessionGameNtPath]);
+                SetInverse(true);
+            }
+            else
+            {
+                // No-exe session: we don't know which process to scope to, so
+                // fall back to system-wide hide (allow only CM). Same shape as
+                // the no-session-but-BL-non-empty state below; the difference
+                // is that we're still in a tracked session (snapshot/restore +
+                // _sessionIds tracking remain in effect).
+                var ownNt = OwnNtPath;
+                SetWhitelist(string.IsNullOrEmpty(ownNt) ? [] : [ownNt]);
+                SetInverse(false);
+            }
             SetActive(true);
         }
         else if (GetBlacklist().Count > 0)
