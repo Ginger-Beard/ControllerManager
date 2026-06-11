@@ -747,6 +747,190 @@ GitHub Actions integration, multi-day approval). Microsoft Trusted Signing
 (~$10/mo on Azure) is the paid alternative. Until signed, SmartScreen warns on
 first run.
 
+### HidHide as a bundled dependency (spike)
+Today CM detects the missing driver at startup (`App.xaml.cs:96-110`) and
+shows a modal that opens nefarius's latest-release page in the browser —
+the user then downloads and installs the MSI manually. This spike covers
+the next step: have CM perform the install itself, either by fetching the
+signed MSI on demand or by shipping it inside our own release artifact.
+
+**License is permissive.** HidHide is MIT — signed binaries can be
+redistributed unchanged with attribution. We can't modify the binaries
+(would break the signature chain), but we can ship or invoke them as-is.
+
+**Detection contract already exists.** The HidHide README documents a
+registry key for downstream apps to probe version:
+
+    HKCR\Installer\Dependencies\NSS.Drivers.HidHide.x64\Version
+
+CM's current detection uses `CreateFile(\\.\HidHide)` which only reports
+present/absent. Move to (or augment with) the registry key when version
+gating becomes relevant — it's nefarius's documented downstream-app hook.
+
+**The two options.**
+
+| Approach | Behavior | Tradeoffs |
+|---|---|---|
+| (b) Download + install on demand | When the user accepts the missing-driver modal, download the pinned signed MSI from nefarius's GitHub release, verify its Authenticode signature, then run it silently with UAC instead of opening the browser. | Online-only. Must pin a known version. Zero bundle size impact. Skips the browser detour and the MSI's own installer UI — see prompt breakdown below. |
+| (c) Bundle the MSI | Ship his MSI inside CM's release artifact. Run on first launch (or from the same modal) if absent. | Offline-capable. Adds ~15MB to our release. We must refresh the bundle each time he ships a new driver — or eat the staleness. |
+
+Both leave nefarius's signature intact — neither re-signs anything. Direct
+`pnputil` install of raw .sys/.inf/.cat files was considered and rejected:
+it reimplements his installer (service registration, root-enumerated device
+node, driver store staging) and breaks the moment he changes any of it.
+
+**Decision: (b) with Authenticode signature verification.** Online install
+is sufficient for a sim-racing / controller manager — anyone running modern
+games on Windows already has internet — and it avoids the bundle-refresh
+treadmill. Revisit (c) only if offline scenarios surface from real users.
+
+**Implementation shape.**
+
+CM stays a portable self-contained `.exe` — (b) does not require us to
+build, ship, or maintain an installer for CM itself. The only MSI in play
+is nefarius's; CM orchestrates a download and an elevated `msiexec` call.
+Nothing about CM's current distribution model (single-file `.exe` from
+GitHub Actions, double-click to run, no Add/Remove Programs entry) changes.
+
+The CM-side code path is roughly:
+
+```csharp
+// Download to temp.
+var bytes = await httpClient.GetByteArrayAsync(msiUrl);
+File.WriteAllBytes(tempMsi, bytes);
+
+// Verify Authenticode chain + publisher before handing to msiexec.
+// WinVerifyTrust + WinTrustData via P/Invoke, ~30 lines.
+if (!VerifyAuthenticodeSignature(tempMsi,
+        expectedPublisher: "Nefarius Software Solutions e.U."))
+    throw new InstallationVerificationException();
+
+// Launch msiexec elevated. CM itself stays unelevated.
+var psi = new ProcessStartInfo("msiexec.exe",
+        $"/i \"{tempMsi}\" /quiet /norestart")
+{
+    Verb            = "runas",   // triggers UAC; msiexec runs elevated
+    UseShellExecute = true,
+};
+using var proc = Process.Start(psi);
+await proc.WaitForExitAsync();
+// Check exit code, BroadcastDeviceChange(), rebuild HidHideClient.
+File.Delete(tempMsi);
+```
+
+**Prompts the user actually sees.**
+
+|  | (a) today | (b) decided |
+|---|---|---|
+| Click "Install" in CM's modal | ✓ | ✓ |
+| Browser opens nefarius's release page | ✓ | — |
+| User finds and clicks the MSI download | ✓ | — |
+| User opens the downloaded MSI | ✓ | — |
+| In-app download progress (our UI) | — | ✓ |
+| UAC consent prompt | ✓ | ✓ |
+| MSI installer window (Welcome → Next → Finish) | ✓ | — |
+| "Install this device software?" (first install from publisher only) | ✓ | ✓ |
+
+`/quiet` suppresses the MSI's own UI. UAC and the first-time
+device-software-trust prompt are OS-level and unavoidable for kernel driver
+installs — neither (b) nor (c) can skip them. The win is removing the
+browser context-switch, manual download/run, and the MSI installer's three
+clicks — not "one-click install."
+
+**Things to do alongside the download + run:**
+
+1. *Authenticode signature verification.* After download, `WinVerifyTrust`
+   the file and confirm the signer matches the expected publisher
+   (string TBD on Discord — likely "Nefarius Software Solutions e.U." or
+   similar). HTTPS already prevents most attack vectors, but verifying the
+   file we're about to hand to a kernel driver installer is cheap insurance
+   and a polite gesture toward users.
+2. *Pre-flight UAC notice.* Right before invoking `runas`, surface
+   something like "You'll see a Windows prompt asking permission — that's
+   expected." Prevents users bouncing off UAC thinking something's wrong.
+3. *Post-install refresh.* `WM_DEVICECHANGE` broadcast (same helper
+   `HidHideClient.BroadcastDeviceChange()` already uses after BL changes)
+   plus reconstruct `HidHideClient` so `IsAvailable` flips true without an
+   app restart.
+4. *Download progress in our UI.* The download is ~5MB and 10-15s on
+   typical connections. Without a progress indicator the "Install HidHide"
+   button looks frozen.
+
+**Real concerns to handle before shipping.**
+
+1. *HidHide is single-instance, single-state.* The persistent blacklist,
+   whitelist, active, and inverse flags are global driver state. Other
+   tools that configure HidHide (DS4Windows, the HidHideClient.exe GUI,
+   JoyToKey wrappers) write the same state. `HidHideClient.ApplyState()`
+   is the only writer within CM but doesn't know about co-resident tools.
+   Becoming the *installer* makes us look more "in charge" of HidHide than
+   we are — a user whose DS4Windows config gets stomped will blame CM.
+   Pre-existing concern, but it gets worse when CM is the one putting the
+   driver on the machine.
+
+2. *Uninstall semantics.* If CM is uninstalled, leave HidHide in place.
+   Pulling it would orphan DS4Windows and similar consumers. Whatever
+   installer technology we end up with must surface this clearly.
+   ("HidHide remains installed; remove separately from Add/Remove
+   Programs if desired.")
+
+3. *Driver version forward compat.* Pin a known-good release (currently
+   v1.5.230.0 — the latest *published* release; the `v1.7.x` tags in
+   nefarius's repo are unreleased dev tags). CM's IOCTL surface today
+   only uses calls present in every released driver, so users with a
+   newer-than-pinned driver are safe. The moment CM adopts a newer IOCTL
+   (e.g. the session blacklist in upstream `master` but not yet released —
+   see the stale comment at `HidHideClient.cs:22-23`), we need a runtime
+   version probe via the registry key plus graceful fallback. Worth fixing
+   that comment regardless of this spike's outcome.
+
+4. *Social etiquette.* MIT permits silent redistribution, but coordinate
+   with nefarius on [Discord](https://discord.nefarius.at/) before
+   shipping. He may have a preferred silent-install invocation
+   (`/quiet /norestart` vs custom flags), opinions about scope, or
+   telemetry he'd appreciate. His name is on the binary we'd be
+   triggering — asking first is the move regardless of license.
+
+**Open questions before implementation.**
+
+- nefarius is mid-rebuild of his release/signing pipeline (`v1.7.x` tags
+  are unreleased; recent commits are CI/signing infrastructure rather
+  than features). Will the next published release change the MSI
+  silent-install contract, the registry key path, or both? Worth
+  confirming on Discord before we hard-code anything.
+- What's the exact Authenticode signer string nefarius's MSI is signed
+  with? We need this for the verification step. A `signtool verify /pa /v`
+  against the current v1.5.230.0 MSI confirms the canonical value; ask on
+  Discord to confirm it'll stay stable across the in-flight release
+  pipeline rebuild rather than churning to a new cert name.
+- Upgrade story when nefarius ships a new driver and our pinned version
+  is older: silently re-run the newer MSI, leave the user's version
+  alone, or surface a "newer HidHide available" hint? Defaulting to
+  "leave alone, surface a hint" is the polite choice — but punts the
+  decision to the user, who may not understand why they're being asked.
+
+**Concrete first step.** Discord conversation with nefarius before any
+code lands — confirm:
+- the silent-install flags he wants downstream apps to use
+  (`/quiet /norestart` is the default assumption);
+- the canonical Authenticode signer string for our verification step;
+- the registry-key contract (especially whether it stays stable across
+  the in-flight release pipeline rebuild);
+- whether he prefers downstream apps to pin a specific release or always
+  grab latest.
+
+Implementation follows. Code shape is sketched above; the unknowns are
+contract-level and only nefarius can answer them.
+
+**References.**
+- HidHide README, "Package integration" section — documents the registry
+  key.
+- `app/App.xaml.cs:96-110` — current missing-driver UX (option a).
+- `app/Services/HidHideClient.cs:22-23` — stale comment to update
+  alongside this work.
+- Latest published release: [v1.5.230.0](https://github.com/nefarius/HidHide/releases/tag/v1.5.230.0)
+  (May 2024).
+
 ---
 
 ## Testing checklist (no code; before each release)

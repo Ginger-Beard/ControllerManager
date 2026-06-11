@@ -90,7 +90,7 @@ public partial class App : Application
             Settings      = SettingsStore.Load();
             Logger.SetLevel(Settings.LogLevel);
 
-            HidHide = new HidHideClient();
+            HidHide = new HidHideClient(Path.Combine(appData, "hidhide-session.json"));
             HidHide.RecoverOnStartup();
 
             if (!HidHide.IsAvailable)

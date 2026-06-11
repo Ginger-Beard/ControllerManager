@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using ControllerManager.Native;
 using Microsoft.Win32.SafeHandles;
 
@@ -105,8 +106,20 @@ public sealed class HidHideClient
     // Restoring this snapshot on EndGameSession rolls back all session changes atomically.
     private List<string>? _preSessionPersistentBl;
 
-    public HidHideClient()
+    // On-disk mirror of _preSessionPersistentBl. Written at BeginGameSession,
+    // deleted at EndGameSession. Its mere existence at startup means the last
+    // session never ended cleanly — the process died before the Undo (--restore)
+    // ran (PC reboot mid-stream, host kill, crash). In that case the session's
+    // devices are stranded in the *persistent* blacklist; RecoverOnStartup reads
+    // this file to roll the blacklist back to its pre-session state. Null disables
+    // disk persistence (the in-memory snapshot still works for clean shutdowns).
+    private readonly string? _sessionSnapshotPath;
+
+    private static readonly JsonSerializerOptions SnapshotJsonOpts = new() { WriteIndented = true };
+
+    public HidHideClient(string? sessionSnapshotPath = null)
     {
+        _sessionSnapshotPath = sessionSnapshotPath;
         using var h = OpenDevice();
         IsAvailable = !h.IsInvalid;
         Logger.WriteVerbose($"[HidHide] Driver {(IsAvailable ? "found" : "not installed")}");
@@ -221,6 +234,11 @@ public sealed class HidHideClient
         // Snapshot the BL before any changes — restored verbatim by EndGameSession.
         _preSessionPersistentBl = GetBlacklist();
 
+        // Mirror the snapshot to disk so an interrupted session (reboot mid-stream,
+        // host kill, crash) can still be rolled back on next startup — the
+        // in-memory copy above doesn't survive process death.
+        WriteSnapshotFile(_preSessionPersistentBl);
+
         var alwaysVisible = alwaysVisibleIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         // New persistent BL = (pre-session ∪ session devices) − always-visible
@@ -320,6 +338,11 @@ public sealed class HidHideClient
         _sessionGameNtPath      = null;
         _preSessionPersistentBl = null;
         _sessionIds.Clear();
+
+        // Clean end — drop the on-disk snapshot so startup recovery doesn't
+        // mistake a finished session for an interrupted one.
+        DeleteSnapshotFile();
+
         ApplyState();
 
         Logger.Write("[HidHide] Session ended");
@@ -373,18 +396,74 @@ public sealed class HidHideClient
     {
         if (!IsAvailable) return;
 
-        // Clear any stale in-memory session state. If CM crashed during a session,
-        // session devices may be stuck in the persistent BL — the user will see them
-        // as disabled on the Devices tab and can re-enable them manually.
+        // Clear any stale in-memory session state.
         _sessionActive          = false;
         _sessionGameNtPath      = null;
         _preSessionPersistentBl = null;
         _sessionIds.Clear();
 
+        // If a session snapshot is on disk, the previous session never ended
+        // cleanly — the process died before the Undo (--restore) ran (PC reboot
+        // mid-stream via Sunshine/Apollo, host kill, crash). The session's devices
+        // are stranded in the persistent BL. Roll the persistent BL back to the
+        // recorded pre-session state, exactly as a clean EndGameSession would have.
+        var snapshot = ReadSnapshotFile();
+        if (snapshot is not null)
+        {
+            SetBlacklist(snapshot);
+            BroadcastDeviceChange();
+            DeleteSnapshotFile();
+            Logger.Write($"[HidHide] Recovered interrupted session — restored persistent BL " +
+                         $"to {snapshot.Count} device(s) from pre-session snapshot");
+        }
+
         // ApplyState rebuilds whitelist/inverse/active from the persistent BL.
         ApplyState();
 
         Logger.Write("[HidHide] Startup recovery complete");
+    }
+
+    // ── Session snapshot persistence ───────────────────────────────────────────────
+    //
+    // The pre-session persistent-BL snapshot is mirrored to disk so a session that
+    // never ends cleanly (reboot mid-stream, host kill, crash) can still be rolled
+    // back on next startup. All operations are best-effort: a failure here must never
+    // block a session start or app startup, so they swallow exceptions and log.
+
+    private void WriteSnapshotFile(List<string> preSessionBl)
+    {
+        if (string.IsNullOrEmpty(_sessionSnapshotPath)) return;
+        try
+        {
+            File.WriteAllText(_sessionSnapshotPath, JsonSerializer.Serialize(preSessionBl, SnapshotJsonOpts));
+        }
+        catch (Exception ex) { Logger.WriteException("HidHide.WriteSnapshotFile", ex); }
+    }
+
+    private List<string>? ReadSnapshotFile()
+    {
+        if (string.IsNullOrEmpty(_sessionSnapshotPath) || !File.Exists(_sessionSnapshotPath))
+            return null;
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(File.ReadAllText(_sessionSnapshotPath)) ?? [];
+        }
+        catch (Exception ex)
+        {
+            // Unreadable snapshot: log and drop it so it doesn't trip recovery on
+            // every subsequent startup. The persistent BL stays as-is (same as the
+            // pre-fix behavior) — the user can re-enable devices from the Devices tab.
+            Logger.WriteException("HidHide.ReadSnapshotFile", ex);
+            DeleteSnapshotFile();
+            return null;
+        }
+    }
+
+    private void DeleteSnapshotFile()
+    {
+        if (string.IsNullOrEmpty(_sessionSnapshotPath)) return;
+        try { if (File.Exists(_sessionSnapshotPath)) File.Delete(_sessionSnapshotPath); }
+        catch (Exception ex) { Logger.WriteException("HidHide.DeleteSnapshotFile", ex); }
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────────
