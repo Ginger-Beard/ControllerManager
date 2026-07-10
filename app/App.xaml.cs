@@ -127,6 +127,27 @@ public partial class App : Application
             Ipc = new IpcServer();
 
             // ── CLI dispatch — headless steam-wrap when first instance ────────
+            if (args.Length > 0 && args[0] == "--usb-diag")
+            {
+                UsbDiagInvocation.Handle(appData);
+                Shutdown(0);
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == "--usb-snapshot")
+            {
+                UsbSnapshotInvocation.Snapshot(appData);
+                Shutdown(0);
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == "--usb-compare")
+            {
+                UsbSnapshotInvocation.Compare(appData);
+                Shutdown(0);
+                return;
+            }
+
             if (args.Length > 0 && args[0] == "--steam-wrap")
             {
                 SteamWrapInvocation.HandleAsync(args[1..], HidHide, ProfileStore)
