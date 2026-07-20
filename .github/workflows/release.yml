@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: echo "date=$(git log -1 --format=%cd --date=short)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
