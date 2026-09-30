@@ -35,6 +35,19 @@ public sealed class LaunchOrchestrator : IDisposable
     private CancellationTokenSource? _cts;
     private Task?                    _flowTask;
 
+    // 1 from Start() until RunFlow's finally completes. Closes the window where a flow
+    // has been accepted but State is still Idle (IsRunning would otherwise read false).
+    private int _flowActive;
+
+    // PID of the game process currently being followed (by executable name); logged at session end.
+    private int? _followedPid;
+
+    // Session ends this long after no process with the game's name remains.
+    private const int GameExitGraceSeconds    = 15;
+    private const int DirectLaunchWaitSeconds = 60;
+    // Steam may need to start up / update before the game appears.
+    private const int SteamLaunchWaitSeconds  = 180;
+
     // Instance IDs added to the session blacklist at session start.
     // Used to compute the correct "remaining hidden" set as devices are revealed.
     private HashSet<string> _sessionHiddenIds = new(StringComparer.OrdinalIgnoreCase);
@@ -71,7 +84,7 @@ public sealed class LaunchOrchestrator : IDisposable
         private set { _state = value; StateChanged?.Invoke(this, value); }
     }
 
-    public bool IsRunning => State != OrchestratorState.Idle;
+    public bool IsRunning => State != OrchestratorState.Idle || Volatile.Read(ref _flowActive) == 1;
 
     public event EventHandler<OrchestratorState>? StateChanged;
     public event EventHandler<string>?            ActivityLogged;
@@ -87,11 +100,25 @@ public sealed class LaunchOrchestrator : IDisposable
 
     // ── Public API ───────────────────────────────────────────────────────────────
 
-    public void Start(Profile profile)
+    public void Start(Profile profile, int? attachPid = null)
     {
-        if (IsRunning) return;
-        _cts      = new CancellationTokenSource();
-        _flowTask = Task.Run(() => RunFlow(profile, _cts.Token));
+        if (Interlocked.CompareExchange(ref _flowActive, 1, 0) != 0)
+        {
+            Logger.Write($"[Orchestrator] Start ignored - flow already running for '{ActiveProfile?.Name}'");
+            return;
+        }
+        try
+        {
+            _cts      = new CancellationTokenSource();
+            var ct    = _cts.Token;
+            _flowTask = Task.Run(() => RunFlow(profile, attachPid, ct));
+        }
+        catch
+        {
+            // RunFlow never started, so its finally won't release the guard.
+            Interlocked.Exchange(ref _flowActive, 0);
+            throw;
+        }
     }
 
     public async Task AbortAsync()
@@ -165,18 +192,19 @@ public sealed class LaunchOrchestrator : IDisposable
 
     // ── State machine ────────────────────────────────────────────────────────────
 
-    private async Task RunFlow(Profile profile, CancellationToken ct)
+    private async Task RunFlow(Profile profile, int? attachPid, CancellationToken ct)
     {
-        ActiveProfile             = profile;
-        _firstDeviceAcquired      = false;
-        _acquisitionWatcherActive = false;
-        Logger.Write($"[Orchestrator] RunFlow — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.AcquisitionTrigger}");
-
         FirstDeviceAcquisitionWatcher? watcher = null;
-        var hasExe = !string.IsNullOrWhiteSpace(profile.GameExecutablePath);
+        var hasExe    = !string.IsNullOrWhiteSpace(profile.GameExecutablePath);
+        var endReason = "unknown";
 
         try
         {
+            ActiveProfile             = profile;
+            _firstDeviceAcquired      = false;
+            _acquisitionWatcherActive = false;
+            Logger.Write($"[Orchestrator] RunFlow — profile='{profile.Name}' exe='{profile.GameExecutablePath}' trigger={profile.AcquisitionTrigger} attachPid={attachPid?.ToString() ?? "none"}");
+
             HideDevices(profile, ct);
             ct.ThrowIfCancellationRequested();
 
@@ -185,17 +213,17 @@ public sealed class LaunchOrchestrator : IDisposable
             // cancels it. Composes with the reveal phase via _sessionStateLock.
             StartHotPlugEnforcer();
 
-            Process? gameProc = null;
+            int? gamePid = null;
             if (hasExe)
             {
-                gameProc = await LaunchGame(profile, ct);
+                gamePid = await AcquireGame(profile, attachPid, ct);
                 ct.ThrowIfCancellationRequested();
 
                 // Correct the HidHide deny-list entry with the game's actual kernel NT path.
                 // No-op for normal C:\... paths (already correct); only opens the game process
                 // when Win32ToNtPath couldn't resolve (UNC / WSL paths). Avoids touching
                 // anti-cheat-protected processes unnecessarily.
-                _hidHide.UpdateSessionGameNtPath(gameProc.Id);
+                _hidHide.UpdateSessionGameNtPath(gamePid.Value);
             }
             else
             {
@@ -206,27 +234,28 @@ public sealed class LaunchOrchestrator : IDisposable
                 // Restore in the Dashboard / End Session in the tray.
                 Log("No game executable configured — hide/reveal-only mode (Sunshine/Apollo). " +
                     "Fire --restore (or click Restore on the Dashboard) to end this session.");
+                endReason = "restore requested";
             }
 
             // Acquisition watcher needs a real game PID to filter ETW events.
             // Without one, Acquisition mode silently degrades to Timer mode for
             // the reveal phase (see RevealDisableThenRestore).
-            if (gameProc is not null
+            if (gamePid is not null
                 && profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened
                 && profile.DisableThenRestore.Count > 0)
             {
-                watcher = StartAcquisitionWatcher(profile, gameProc.Id);
+                watcher = StartAcquisitionWatcher(profile, gamePid.Value);
                 _acquisitionWatcherActive = watcher is not null;
             }
-            else if (gameProc is not null && Logger.CurrentLevel >= LogLevel.Verbose)
+            else if (gamePid is not null && Logger.CurrentLevel >= LogLevel.Verbose)
             {
                 // Pure observation when verbose+ logging is on: attach a watcher
                 // to every HID device so the log shows exactly when (and by which
                 // process) each one is opened. Doesn't drive any orchestrator
                 // decisions; the signal fires harmlessly.
-                watcher = StartDiagnosticWatcher(gameProc.Id);
+                watcher = StartDiagnosticWatcher(gamePid.Value);
             }
-            else if (gameProc is null
+            else if (gamePid is null
                 && profile.AcquisitionTrigger == AcquisitionTrigger.FirstDeviceOpened
                 && profile.DisableThenRestore.Count > 0)
             {
@@ -240,29 +269,44 @@ public sealed class LaunchOrchestrator : IDisposable
                 ct.ThrowIfCancellationRequested();
             }
 
-            if (gameProc is not null)
-                await MonitorUntilExit(profile, gameProc, ct);
+            if (gamePid is not null)
+            {
+                await MonitorUntilExit(profile, gamePid.Value, ct);
+                endReason = "game exited";
+            }
             else
                 await WaitUntilCancelled(ct);
         }
         catch (OperationCanceledException)
         {
+            endReason = "cancelled";
             Log("Flow cancelled.");
         }
         catch (Exception ex)
         {
+            endReason = $"error: {ex.Message}";
             Logger.WriteException("Orchestrator.RunFlow", ex);
             Log($"Error: {ex.Message}");
         }
         finally
         {
-            StopHotPlugEnforcer();
-            try { watcher?.Stop(); watcher?.Dispose(); } catch { }
-            // Always clean up the HidHide session — even if the flow threw or was cancelled
-            // mid-way (e.g. game launch timeout). Prevents stale session blacklist state.
-            _hidHide.EndGameSession();
-            ActiveProfile = null;
-            State = OrchestratorState.Idle;
+            try
+            {
+                StopHotPlugEnforcer();
+                try { watcher?.Stop(); watcher?.Dispose(); } catch { }
+                // Always clean up the HidHide session — even if the flow threw or was cancelled
+                // mid-way (e.g. game launch timeout). Prevents stale session blacklist state.
+                _hidHide.EndGameSession();
+                Logger.Write($"[Orchestrator] Session end - profile='{profile.Name}' reason={endReason} lastPid={_followedPid?.ToString() ?? "none"}");
+                _followedPid = null;
+                ActiveProfile = null;
+                State = OrchestratorState.Idle;
+            }
+            finally
+            {
+                // Released last, and even if teardown throws — otherwise no flow could ever start again.
+                Interlocked.Exchange(ref _flowActive, 0);
+            }
         }
     }
 
@@ -347,36 +391,71 @@ public sealed class LaunchOrchestrator : IDisposable
 
     // ── Phase 2: launch ──────────────────────────────────────────────────────────
 
-    private async Task<Process> LaunchGame(Profile profile, CancellationToken ct)
+    // Live PIDs for a process name; null means "unknown" (enumeration failed).
+    private static List<int>? GetLivePids(string name)
+    {
+        Process[] procs;
+        try { procs = Process.GetProcessesByName(name); }
+        catch { return null; }
+
+        try
+        {
+            var ids = new List<int>(procs.Length);
+            foreach (var p in procs)
+            {
+                try { ids.Add(p.Id); } catch { }
+            }
+            return ids;
+        }
+        finally
+        {
+            foreach (var p in procs) p.Dispose();
+        }
+    }
+
+    private async Task<int> AcquireGame(Profile profile, int? attachPid, CancellationToken ct)
     {
         State = OrchestratorState.LaunchingGame;
-        Log($"Launching {profile.Name}...");
+        var n    = ProcessName(profile.GameExecutableName);
+        var live = GetLivePids(n);
 
-        var launched = Process.Start(new ProcessStartInfo
+        if (attachPid is int ap && live is not null && live.Contains(ap))
         {
-            FileName        = profile.GameExecutablePath,
-            UseShellExecute = true,
-        });
-        Logger.WriteVerbose($"[Orchestrator] Process.Start returned {(launched is null ? "null (shell launch)" : launched.Id.ToString())}");
+            Log($"Attaching to running {n}.exe (PID {ap}) detected by process watcher - not launching.");
+            _followedPid = ap;
+            return ap;
+        }
 
-        var procName = ProcessName(profile.GameExecutableName);
-        Log($"Waiting for {procName}.exe...");
+        if (live is { Count: > 0 })
+        {
+            var min = live.Min();
+            Log($"{n}.exe already running (PID(s) {string.Join(", ", live)}) - attaching to PID {min}, not launching.");
+            _followedPid = min;
+            return min;
+        }
 
-        var deadline = DateTime.UtcNow.AddSeconds(60);
+        Log($"Launching {profile.Name}...");
+        var m = GameLauncher.Launch(profile.GameExecutablePath, Log);
+        var timeoutSeconds = m == LaunchMethod.SteamUrl ? SteamLaunchWaitSeconds : DirectLaunchWaitSeconds;
+
+        Log($"Waiting for {n}.exe...");
+        var start    = DateTime.UtcNow;
+        var deadline = start.AddSeconds(timeoutSeconds);
         while (DateTime.UtcNow < deadline)
         {
             ct.ThrowIfCancellationRequested();
-            var procs = Process.GetProcessesByName(procName);
-            if (procs.Length > 0)
+            var pids = GetLivePids(n);
+            if (pids is { Count: > 0 })
             {
-                for (int i = 1; i < procs.Length; i++) procs[i].Dispose();
-                Log($"Found {procName}.exe (PID {procs[0].Id})");
-                return procs[0];
+                var min = pids.Min();
+                Log($"Found {n}.exe (PID {min}) {(DateTime.UtcNow - start).TotalSeconds:0.#}s after launch ({m}).");
+                _followedPid = min;
+                return min;
             }
             await Task.Delay(500, ct);
         }
 
-        throw new TimeoutException($"'{procName}.exe' did not start within 60 seconds.");
+        throw new TimeoutException($"'{n}.exe' did not appear within {timeoutSeconds}s after {m} launch.");
     }
 
     // ── Acquisition watcher (optional, drives the wait phase in acquisition mode) ───
@@ -748,21 +827,56 @@ public sealed class LaunchOrchestrator : IDisposable
 
     // ── Phase 5: monitor until exit ──────────────────────────────────────────────
 
-    private async Task MonitorUntilExit(Profile profile, Process gameProc, CancellationToken ct)
+    // Monitoring is by executable name, so a launcher stub that hands off to a differently
+    // named exe is not followed (the profile must point at the real game exe).
+    private async Task MonitorUntilExit(Profile profile, int pid, CancellationToken ct)
     {
         State = OrchestratorState.Monitoring;
-        var procName = ProcessName(profile.GameExecutableName);
-        Log($"Monitoring {procName}.exe...");
+        _followedPid = pid;
+        var n = ProcessName(profile.GameExecutableName);
+        Log($"Monitoring {n}.exe - following PID {pid}; session ends {GameExitGraceSeconds}s after no {n}.exe remains.");
 
+        DateTime? noneSince = null;
         while (true)
         {
             ct.ThrowIfCancellationRequested();
-            try { if (gameProc.HasExited) break; }
-            catch { break; }
+            var live = GetLivePids(n);
+
+            if (live is null)
+            {
+                noneSince = null;
+            }
+            else if (live.Count > 0)
+            {
+                if (noneSince is not null)
+                    Log($"{n}.exe reappeared (PID(s) {string.Join(", ", live)}) - continuing.");
+                noneSince = null;
+
+                if (_followedPid is int followed && !live.Contains(followed))
+                {
+                    var next = live.Min();
+                    Log($"{n}.exe PID {followed} gone; now following PID {next}.");
+                    _followedPid = next;
+                    pid          = next;
+                    try { _hidHide.UpdateSessionGameNtPath(next); }
+                    catch (Exception ex) { Logger.WriteException("Orchestrator.UpdateNtPath", ex); }
+                }
+            }
+            else
+            {
+                if (noneSince is null)
+                {
+                    noneSince = DateTime.UtcNow;
+                    Log($"No {n}.exe running (last PID {pid}) - ending session in {GameExitGraceSeconds}s unless it reappears.");
+                }
+                if ((DateTime.UtcNow - noneSince.Value).TotalSeconds >= GameExitGraceSeconds)
+                    break;
+            }
+
             await Task.Delay(1000, ct);
         }
 
-        Log($"{procName}.exe exited.");
+        Log($"{n}.exe exited (none for {GameExitGraceSeconds}s, last PID {pid}).");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────

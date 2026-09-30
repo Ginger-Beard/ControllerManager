@@ -100,6 +100,7 @@ public sealed class HidHideClient
     public IReadOnlySet<string> SessionBlacklistIds => _sessionIds;
 
     private bool          _sessionActive;
+    public bool IsSessionActive => _sessionActive;
     private string?       _sessionGameNtPath;
     // Snapshot of the persistent BL before the session started.
     // Session management modifies the persistent BL (installed driver has no session BL IOCTL).

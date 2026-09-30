@@ -56,7 +56,8 @@ public sealed class ProcessWatcher : IDisposable
             .Where(p => p.ProcessWatcherEnabled && !string.IsNullOrEmpty(p.GameExecutableName))
             .ToList();
 
-        if (_orchestrator.IsRunning)
+        // HidHide.IsSessionActive covers --steam-wrap sessions that run outside the orchestrator.
+        if (_orchestrator.IsRunning || App.HidHide.IsSessionActive)
         {
             // While a flow is running, mark any matching game PIDs as handled so
             // they don't re-trigger when the flow stops or is aborted.
@@ -65,7 +66,10 @@ public sealed class ProcessWatcher : IDisposable
                 var exeName = profile.GameExecutableName
                     .Replace(".exe", "", StringComparison.OrdinalIgnoreCase);
                 foreach (var proc in Process.GetProcessesByName(exeName))
+                {
                     _handledPids.Add(proc.Id);
+                    proc.Dispose();
+                }
             }
             return;
         }
@@ -76,19 +80,27 @@ public sealed class ProcessWatcher : IDisposable
                 .Replace(".exe", "", StringComparison.OrdinalIgnoreCase);
 
             var procs = Process.GetProcessesByName(exeName);
-            foreach (var proc in procs)
+            try
             {
-                if (_handledPids.Contains(proc.Id)) continue;
-                _handledPids.Add(proc.Id);
-                _orchestrator.Start(profile);
-                return;
+                foreach (var proc in procs)
+                {
+                    if (_handledPids.Contains(proc.Id)) continue;
+                    _handledPids.Add(proc.Id);
+                    Logger.Write($"[ProcessWatcher] {exeName}.exe PID {proc.Id} detected - starting profile '{profile.Name}' (attach)");
+                    _orchestrator.Start(profile, proc.Id);
+                    return;
+                }
+            }
+            finally
+            {
+                foreach (var p in procs) p.Dispose();
             }
         }
 
         // Prune dead PIDs so they can re-trigger if game restarts
         _handledPids.RemoveWhere(pid =>
         {
-            try { Process.GetProcessById(pid); return false; }
+            try { using var p = Process.GetProcessById(pid); return false; }
             catch { return true; }
         });
     }
