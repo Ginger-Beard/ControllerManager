@@ -101,6 +101,12 @@ public sealed class HidHideClient
 
     private bool          _sessionActive;
     public bool IsSessionActive => _sessionActive;
+
+    // Serialises every change to the session and the persistent blacklist. Without it, a
+    // blacklist update racing EndGameSession could re-add the session's devices after the
+    // pre-session snapshot was restored, leaving them globally hidden with no session to
+    // roll them back.
+    private readonly object _sessionLock = new();
     private string?       _sessionGameNtPath;
     // Snapshot of the persistent BL before the session started.
     // Session management modifies the persistent BL (installed driver has no session BL IOCTL).
@@ -228,6 +234,13 @@ public sealed class HidHideClient
                                  IEnumerable<string> alwaysVisibleIds,
                                  string gameExePath)
     {
+        lock (_sessionLock) BeginGameSessionCore(hideIds, alwaysVisibleIds, gameExePath);
+    }
+
+    private void BeginGameSessionCore(IEnumerable<string> hideIds,
+                                      IEnumerable<string> alwaysVisibleIds,
+                                      string gameExePath)
+    {
         if (!IsAvailable) return;
         var ids = hideIds.ToList();
         if (ids.Count == 0) return;
@@ -275,6 +288,11 @@ public sealed class HidHideClient
     /// </summary>
     public void UpdateSessionGameNtPath(int pid)
     {
+        lock (_sessionLock) UpdateSessionGameNtPathCore(pid);
+    }
+
+    private void UpdateSessionGameNtPathCore(int pid)
+    {
         if (!IsAvailable || !_sessionActive) return;
 
         // Already a proper NT device path — no kernel query needed.
@@ -304,6 +322,11 @@ public sealed class HidHideClient
 
     public void UpdateSessionBlacklist(IEnumerable<string> remainingInstanceIds)
     {
+        lock (_sessionLock) UpdateSessionBlacklistCore(remainingInstanceIds);
+    }
+
+    private void UpdateSessionBlacklistCore(IEnumerable<string> remainingInstanceIds)
+    {
         if (!IsAvailable || !_sessionActive) return;
         var remaining = remainingInstanceIds.ToList();
 
@@ -324,6 +347,11 @@ public sealed class HidHideClient
     }
 
     public void EndGameSession()
+    {
+        lock (_sessionLock) EndGameSessionCore();
+    }
+
+    private void EndGameSessionCore()
     {
         if (!IsAvailable) return;
 
@@ -353,6 +381,11 @@ public sealed class HidHideClient
 
     public void AddToPersistentBlacklist(string instanceId)
     {
+        lock (_sessionLock) AddToPersistentBlacklistCore(instanceId);
+    }
+
+    private void AddToPersistentBlacklistCore(string instanceId)
+    {
         if (!IsAvailable) return;
 
         var existing = GetBlacklist();
@@ -371,6 +404,11 @@ public sealed class HidHideClient
     }
 
     public void RemoveFromPersistentBlacklist(string instanceId)
+    {
+        lock (_sessionLock) RemoveFromPersistentBlacklistCore(instanceId);
+    }
+
+    private void RemoveFromPersistentBlacklistCore(string instanceId)
     {
         if (!IsAvailable) return;
 

@@ -211,6 +211,11 @@ public sealed class LaunchOrchestrator : IDisposable
 
         lock (_sessionStateLock)
         {
+            // The session may have ended while the devices were being enumerated above
+            // (teardown clears ActiveProfile under this lock). Applying now would write this
+            // profile's hide set into HidHide with no session left to roll it back.
+            if (ActiveProfile is null || ActiveProfile.Id != updated.Id) return;
+
             // Devices already revealed by the reveal phase stay visible.
             foreach (var id in _sessionRevealedIds) keepIds.Add(id);
 
@@ -344,10 +349,15 @@ public sealed class LaunchOrchestrator : IDisposable
                 try { watcher?.Stop(); watcher?.Dispose(); } catch { }
                 // Always clean up the HidHide session — even if the flow threw or was cancelled
                 // mid-way (e.g. game launch timeout). Prevents stale session blacklist state.
-                _hidHide.EndGameSession();
+                // Under the session lock so a profile save (ReapplyActiveProfile) can't apply
+                // a hide set to a session that is being torn down.
+                lock (_sessionStateLock)
+                {
+                    _hidHide.EndGameSession();
+                    ActiveProfile = null;
+                }
                 Logger.Write($"[Orchestrator] Session end - profile='{profile.Name}' reason={endReason} lastPid={_followedPid?.ToString() ?? "none"}");
                 _followedPid = null;
-                ActiveProfile = null;
                 State = OrchestratorState.Idle;
             }
             finally
