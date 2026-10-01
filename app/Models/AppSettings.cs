@@ -24,4 +24,10 @@ public sealed class AppSettings
 
     [JsonPropertyName("alwaysOnTop")]
     public bool AlwaysOnTop { get; set; }
+
+    // Set when the user ticks "Don't remind me again" on the HidHide install
+    // prompt. Suppresses the first-launch install dialog; the grayed-out tabs
+    // and the Settings-tab status still surface that HidHide is missing.
+    [JsonPropertyName("suppressHidHidePrompt")]
+    public bool SuppressHidHidePrompt { get; set; }
 }

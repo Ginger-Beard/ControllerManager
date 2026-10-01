@@ -11,11 +11,32 @@
         <vm:MainViewModel/>
     </Window.DataContext>
 
+    <Window.Resources>
+        <!-- Disables a tab (and shows an explanatory tooltip on hover) while the
+             HidHide driver is unavailable. HidHideAvailable lives on the Window's
+             DataContext (MainViewModel); each gated tab overrides DataContext to its
+             own sub-VM, so we reach back up via RelativeSource. ShowOnDisabled lets
+             the tooltip appear even though the tab itself is disabled. -->
+        <Style x:Key="HidHideGatedTab" TargetType="TabItem">
+            <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+            <Style.Triggers>
+                <DataTrigger Value="False"
+                             Binding="{Binding DataContext.HidHideAvailable,
+                                       RelativeSource={RelativeSource AncestorType=Window}}">
+                    <Setter Property="IsEnabled" Value="False"/>
+                    <Setter Property="ToolTip"
+                            Value="These features only work after installing HidHide."/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
     <Grid>
         <TabControl>
 
             <!-- ── Dashboard ──────────────────────────────────────────────── -->
-            <TabItem Header="Dashboard" DataContext="{Binding Dashboard}">
+            <TabItem Header="Dashboard" DataContext="{Binding Dashboard}"
+                     Style="{StaticResource HidHideGatedTab}">
                 <DockPanel Margin="12">
 
                     <!-- Status + buttons (top) -->
@@ -169,7 +190,8 @@
             </TabItem>
 
             <!-- ── Games ──────────────────────────────────────────────────── -->
-            <TabItem Header="Games" DataContext="{Binding Games}">
+            <TabItem Header="Games" DataContext="{Binding Games}"
+                     Style="{StaticResource HidHideGatedTab}">
                 <local:GamesView/>
             </TabItem>
 
@@ -444,7 +466,7 @@
                                 </Style>
                             </StackPanel.Style>
                             <TextBlock Text="✗ Not installed  " Foreground="#CC4444" FontWeight="SemiBold"/>
-                            <TextBlock><Hyperlink Command="{Binding OpenHidHideDownloadCommand}">Download ↗</Hyperlink></TextBlock>
+                            <TextBlock><Hyperlink Command="{Binding InstallHidHideCommand}">Install</Hyperlink></TextBlock>
                         </StackPanel>
                     </StackPanel>
 

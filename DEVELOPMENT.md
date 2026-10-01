@@ -748,6 +748,27 @@ GitHub Actions integration, multi-day approval). Microsoft Trusted Signing
 first run.
 
 ### HidHide as a bundled dependency (spike)
+
+> **Update — implemented (option b).** `App.xaml.cs` now shows
+> `Views/HidHideInstallDialog` with an in-app **Install HidHide** button that
+> runs `Services/HidHideInstaller`. Two facts from the sketch below turned out
+> wrong once we inspected the real artifact:
+> - **It's an `.exe`, not an `.msi`.** The pinned v1.5.230.0 release ships a
+>   single asset, `HidHide_1.5.230_x64.exe` — an **Advanced Installer (Caphyon)**
+>   bootstrapper. Silent invocation is `/exenoui /qn /norestart`, not
+>   `msiexec /i … /quiet`.
+> - **CM is already elevated** (`app.manifest` → `requireAdministrator`), so the
+>   `Verb = "runas"` second-UAC dance in the sketch is unnecessary — the installer
+>   runs directly under our token.
+>
+> Verification implemented as decided: pinned version **1.5.230.0**, pinned
+> **SHA-256** `f4bbbcb8…7b7605f6`, and Authenticode publisher check against the
+> now-confirmed signer **`Nefarius Software Solutions e.U.`** (DigiCert G4 Code
+> Signing). Revocation is not checked online — the hash pin is the load-bearing
+> integrity guarantee. Still outstanding from the list below: the Discord
+> courtesy conversation with nefarius, and the registry-key version probe (we
+> still detect present/absent via `CreateFile(\\.\HidHide)`).
+
 Today CM detects the missing driver at startup (`App.xaml.cs:96-110`) and
 shows a modal that opens nefarius's latest-release page in the browser —
 the user then downloads and installs the MSI manually. This spike covers

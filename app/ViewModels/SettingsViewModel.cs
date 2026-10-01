@@ -49,9 +49,9 @@ public sealed class SettingsViewModel : ViewModelBase
 
     public string LogFilePath => Logger.LogFilePath ?? "(logging not initialized)";
 
-    public ICommand OpenLogFolderCommand       { get; }
-    public ICommand OpenHidHideDownloadCommand { get; }
-    public ICommand OpenHidHideHomeCommand     { get; }
+    public ICommand OpenLogFolderCommand   { get; }
+    public ICommand InstallHidHideCommand  { get; }
+    public ICommand OpenHidHideHomeCommand { get; }
     public ICommand OpenRepoCommand            { get; }
     public ICommand OpenNefariusCommand        { get; }
 
@@ -74,10 +74,14 @@ public sealed class SettingsViewModel : ViewModelBase
                 Process.Start(new ProcessStartInfo("explorer.exe", $"\"{folder}\"") { UseShellExecute = true });
         });
 
-        OpenHidHideDownloadCommand = new RelayCommand(_ =>
-            Process.Start(new ProcessStartInfo(
-                "https://github.com/nefarius/HidHide/releases/latest")
-                { UseShellExecute = true }));
+        // Re-run the in-app install popup (same flow as first launch), then refresh
+        // the status line. IsAvailable won't flip until the post-install reboot, so
+        // the status may still read "not installed" until Windows restarts.
+        InstallHidHideCommand = new RelayCommand(_ =>
+        {
+            App.RunHidHideInstallDialog();
+            OnPropertyChanged(nameof(HidHideInstalled));
+        });
 
         OpenHidHideHomeCommand = new RelayCommand(_ =>
             Process.Start(new ProcessStartInfo(

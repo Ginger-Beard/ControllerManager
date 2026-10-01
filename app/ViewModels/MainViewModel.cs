@@ -10,6 +10,11 @@ public sealed class MainViewModel : ViewModelBase
     public GamesViewModel     Games     { get; }
     public SettingsViewModel  Settings  { get; }
 
+    // Gates the Dashboard and Games tabs — those features are meaningless without
+    // the driver. Fixed for the session: the driver is only (re)detected at startup,
+    // and a fresh install needs a reboot before IsAvailable can flip true.
+    public bool HidHideAvailable => App.HidHide.IsAvailable;
+
     private CancellationTokenSource? _refreshDebounce;
 
     public MainViewModel()

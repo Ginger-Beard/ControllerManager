@@ -18,6 +18,10 @@ public partial class App : Application
     public static DeviceChangeNotifier DeviceNotifier { get; private set; } = null!;
     public static IpcServer?           Ipc            { get; private set; }
     public static TrayService?         Tray           { get; private set; }
+    public static string               AppDataDir     { get; private set; } = null!;
+
+    /// <summary>Outcome of the HidHide install dialog, for the caller's skip handling.</summary>
+    public readonly record struct HidHideInstallOutcome(bool Installed, bool DontRemindAgain);
 
     private Mutex? _mutex;
 
@@ -52,6 +56,13 @@ public partial class App : Application
         {
             var args = e.Args;
 
+            // Tray app: never auto-exit on last-window-close. Must be set before we
+            // show any WPF window (e.g. the HidHide install dialog) — otherwise
+            // closing that dialog while it's the only window begins app shutdown,
+            // and TrayService's later ShutdownMode write throws. TrayService sets
+            // this again once the main window exists; this is the earliest guard.
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
             // ── Single-instance check ────────────────────────────────────────
             bool isFirst;
             try
@@ -82,6 +93,7 @@ public partial class App : Application
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "ControllerManager");
             Directory.CreateDirectory(appData);
+            AppDataDir = appData;
 
             Logger.Initialize(appData);
 
@@ -93,21 +105,8 @@ public partial class App : Application
             HidHide = new HidHideClient(Path.Combine(appData, "hidhide-session.json"));
             HidHide.RecoverOnStartup();
 
-            if (!HidHide.IsAvailable)
-            {
-                var result = MessageBox.Show(
-                    "HidHide is not installed.\n\n" +
-                    "Controller Manager needs the HidHide kernel driver to hide and reveal devices. " +
-                    "Without it, profiles will have no effect.\n\n" +
-                    "Click OK to open the HidHide download page.",
-                    "HidHide not found",
-                    MessageBoxButton.OKCancel,
-                    MessageBoxImage.Warning);
-                if (result == MessageBoxResult.OK)
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
-                        "https://github.com/nefarius/HidHide/releases/latest")
-                        { UseShellExecute = true });
-            }
+            if (!HidHide.IsAvailable && !Settings.SuppressHidHidePrompt)
+                PromptForHidHideInstall();
 
             // Single kernel-driven device change notifier. Replaces the old
             // polling loops in DevicesViewModel and LaunchOrchestrator's
@@ -180,6 +179,73 @@ public partial class App : Application
                 MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
+    }
+
+    /// <summary>
+    /// Shows the HidHide install dialog and, on a successful install, re-probes the
+    /// driver and offers the reboot HidHide needs before it becomes active. Skip
+    /// handling (the "don't remind" choice and the reduced-functionality notice) is
+    /// left to the caller via the returned outcome. Reusable from the first-launch
+    /// gate and the Settings tab. Must be called on the UI thread.
+    /// </summary>
+    public static HidHideInstallOutcome RunHidHideInstallDialog()
+    {
+        var dialog = new Views.HidHideInstallDialog();
+        dialog.ShowDialog();
+
+        if (dialog.Installed)
+        {
+            // Rebuild the client so it re-probes the driver in its constructor. A
+            // fresh install needs a reboot before the device opens, so IsAvailable
+            // will usually still be false here — the reboot prompt below covers that.
+            HidHide = new HidHideClient(Path.Combine(AppDataDir, "hidhide-session.json"));
+            HidHide.RecoverOnStartup();
+
+            var reboot = MessageBox.Show(
+                "HidHide was installed successfully.\n\n" +
+                "Windows needs to restart before HidHide becomes active. Until then, " +
+                "the Dashboard and Games tabs stay disabled.\n\n" +
+                "Restart now?",
+                "Restart required",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information);
+
+            if (reboot == MessageBoxResult.Yes)
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                        "shutdown.exe", "/r /t 0 /c \"Restarting to finish HidHide installation\"")
+                        { UseShellExecute = false, CreateNoWindow = true });
+                }
+                catch (Exception ex) { Logger.WriteException("HidHide reboot", ex); }
+            }
+        }
+
+        return new HidHideInstallOutcome(dialog.Installed, dialog.DontRemindAgain);
+    }
+
+    // First-launch driver gate. Adds skip-specific handling on top of the shared
+    // install flow: persist "don't remind me" and explain the reduced functionality.
+    private void PromptForHidHideInstall()
+    {
+        var outcome = RunHidHideInstallDialog();
+        if (outcome.Installed) return;
+
+        // Skipped (or install failed / dialog dismissed) — HidHide still isn't usable.
+        if (outcome.DontRemindAgain)
+        {
+            Settings.SuppressHidHidePrompt = true;
+            SettingsStore.Save(Settings);
+        }
+
+        MessageBox.Show(
+            "HidHide isn't installed, so the Dashboard and Games tabs are disabled — " +
+            "Controller Manager can't hide or reveal devices without it.\n\n" +
+            "You can install HidHide anytime from the Settings tab.",
+            "Limited functionality",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
     }
 
     private static void ForwardToRunningInstance(string[] args)
