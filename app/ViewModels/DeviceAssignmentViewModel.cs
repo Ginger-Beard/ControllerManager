@@ -1,3 +1,5 @@
+using ControllerManager.Models;
+
 namespace ControllerManager.ViewModels;
 
 public enum DeviceRole { AlwaysVisible, RevealAfterStart, AlwaysHidden }
@@ -13,6 +15,10 @@ public sealed class DeviceAssignmentViewModel : ViewModelBase
 
     public string InstanceId   { get; }
     public string FriendlyName { get; }
+
+    // Identity fields (vendor/product/serial/interface) carried through the editor so a
+    // save doesn't wipe what the healer backfilled. null for rows with no known identity.
+    public DeviceRef? Identity { get; }
 
     private DeviceRole _role;
     public DeviceRole Role
@@ -31,11 +37,13 @@ public sealed class DeviceAssignmentViewModel : ViewModelBase
     public bool IsRevealAfterStart => Role == DeviceRole.RevealAfterStart;
 
     public DeviceAssignmentViewModel(string instanceId, string friendlyName,
-                                     DeviceRole role, double delaySeconds = 0)
+                                     DeviceRole role, double delaySeconds = 0,
+                                     DeviceRef? identity = null)
     {
         InstanceId    = instanceId;
         FriendlyName  = friendlyName;
         _role         = role;
         _delaySeconds = delaySeconds;
+        Identity      = identity;
     }
 }

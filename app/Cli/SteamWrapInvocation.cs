@@ -26,6 +26,11 @@ public static class SteamWrapInvocation
         var profile = profiles.Load().FirstOrDefault(p => p.Id == id);
         if (profile is null) return;
 
+        // Point stale device refs at the live devices they match, for this run only.
+        var warnings = new List<string>();
+        profile = DeviceMatcher.ResolveForSession(profile, new DeviceEnumerator().GetAll(showAllHid: true), warnings);
+        foreach (var w in warnings) Logger.Write($"[SteamWrap] {w}");
+
         if (hidHide.IsAvailable)
         {
             // Use the broad HID enumeration (showAllHid: true) and exclude
@@ -39,10 +44,14 @@ public static class SteamWrapInvocation
             // Expand both sets to include every sibling HID interface — composite
             // devices need every child either kept visible or explicitly hidden,
             // since HidHide's kernel filter does direct string compare.
+            // A composite device is kept if its primary OR any child interface is listed.
+            bool IsKeptDevice(ControllerManager.Models.HidDevice d) =>
+                keepPrimaries.Contains(d.InstanceId) || d.ChildInstanceIds.Any(keepPrimaries.Contains);
+
             var keepIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var d in allDevices)
             {
-                if (!keepPrimaries.Contains(d.InstanceId)) continue;
+                if (!IsKeptDevice(d)) continue;
                 if (d.ChildInstanceIds.Count > 0)
                     foreach (var c in d.ChildInstanceIds) keepIds.Add(c);
                 else
@@ -50,7 +59,7 @@ public static class SteamWrapInvocation
             }
 
             var toHide = allDevices
-                .Where(d => !keepPrimaries.Contains(d.InstanceId))
+                .Where(d => !IsKeptDevice(d))
                 .Where(d => !d.IsKeyboardOrMouse)
                 .Where(d => d.AxisCount > 0 || d.ButtonCount > 0)
                 .SelectMany(d => d.ChildInstanceIds.Count > 0 ? d.ChildInstanceIds : [d.InstanceId])

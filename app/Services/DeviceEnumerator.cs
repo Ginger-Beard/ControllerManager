@@ -69,6 +69,10 @@ public sealed class DeviceEnumerator
         uint dnDevInst, ref DEVPROPKEY PropertyKey, out uint PropertyType,
         [Out] byte[]? PropertyBuffer, ref uint PropertyBufferSize, uint ulFlags);
 
+    [DllImport("CfgMgr32.dll", CharSet = CharSet.Unicode)]
+    private static extern int CM_Get_Device_IDW(uint dnDevInst, char[] Buffer, uint BufferLen, uint ulFlags);
+
+    private const int  MAX_DEVICE_ID_LEN = 200;
     private const int  CR_SUCCESS    = 0;
     private const int  CR_BUFFER_SMALL = 0x0000001A;
     private const uint DEVPROP_TYPE_STRING = 0x12;
@@ -100,7 +104,7 @@ public sealed class DeviceEnumerator
     //   3. External HidHide GUI change: stale until the user clicks Refresh
     //      (DevicesViewModel/ProfileEditorViewModel.RefreshCommand calls
     //      InvalidateAll first). Acceptable — external edits are rare.
-    private sealed record CacheEntry(string Link, HidDeviceInfo Info, string? ContainerId);
+    private sealed record CacheEntry(string Link, HidDeviceInfo Info, string? ContainerId, string UsbSerial);
 
     private readonly ConcurrentDictionary<string, CacheEntry> _cache =
         new(StringComparer.OrdinalIgnoreCase);
@@ -191,12 +195,13 @@ public sealed class DeviceEnumerator
                 .Select(id =>
                 {
                     if (_cache.TryGetValue(id, out var hit))
-                        return (Id: id, hit.Link, hit.Info);
+                        return (Id: id, hit.Link, hit.Info, hit.UsbSerial);
 
                     var link = SetupApi.GetSymbolicLink(HidInterfaceGuid, id) ?? HidApi.ToDevicePath(id);
                     var info = QueryHidDeviceInfo(id, link);
-                    _cache[id] = new CacheEntry(link, info, GetContainerId(id));
-                    return (Id: id, Link: link, Info: info);
+                    var serial = GetUsbSerial(id);
+                    _cache[id] = new CacheEntry(link, info, GetContainerId(id), serial);
+                    return (Id: id, Link: link, Info: info, UsbSerial: serial);
                 })
                 .ToList();
 
@@ -259,6 +264,8 @@ public sealed class DeviceEnumerator
                 Usage                 = primary.Info.Usage,
                 AlternativeInstanceId = altId ?? "",
                 ChildInstanceIds      = children,
+                UsbSerial             = primary.UsbSerial,
+                InterfaceNumber       = miMatch.Success ? miMatch.Groups[1].Value.ToUpperInvariant() : "",
             });
         }
 
@@ -271,6 +278,51 @@ public sealed class DeviceEnumerator
         }
 
         return [.. results.OrderBy(d => d.FriendlyName)];
+    }
+
+    // ── USB serial lookup ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Walks up from a HID devnode to its USB device node and returns the normalised
+    /// serial (the last instance-ID token). "" for port-derived IDs, non-USB buses or
+    /// any failure. Composite devices go HID child → USB\..&amp;MI_xx → USB device.
+    /// </summary>
+    public static string GetUsbSerial(string instanceId)
+    {
+        try
+        {
+            if (CM_Locate_DevNodeW(out uint node, instanceId, 0) != CR_SUCCESS) return "";
+
+            for (int level = 0; level <= 4; level++)
+            {
+                var id = GetDeviceId(node);
+                if (id is null) return "";
+
+                bool isHid = id.StartsWith("HID\\", StringComparison.OrdinalIgnoreCase);
+                bool isUsb = id.StartsWith("USB\\", StringComparison.OrdinalIgnoreCase);
+                bool isUsbInterface = isUsb && id.Contains("&MI_", StringComparison.OrdinalIgnoreCase);
+
+                if (isUsb && !isUsbInterface)
+                {
+                    var token = id[(id.LastIndexOf('\\') + 1)..];
+                    return token.Contains('&') ? "" : DeviceMatcher.NormalizeSerial(token);
+                }
+                if (!isHid && !isUsbInterface) return "";
+
+                if (CM_Get_Parent(out uint parent, node, 0) != CR_SUCCESS) return "";
+                node = parent;
+            }
+        }
+        catch { }
+        return "";
+    }
+
+    private static string? GetDeviceId(uint node)
+    {
+        var buf = new char[MAX_DEVICE_ID_LEN];
+        if (CM_Get_Device_IDW(node, buf, (uint)buf.Length, 0) != CR_SUCCESS) return null;
+        int end = Array.IndexOf(buf, '\0');
+        return new string(buf, 0, end > 0 ? end : buf.Length);
     }
 
     // ── HidHide-compatible gaming device filter ───────────────────────────────────

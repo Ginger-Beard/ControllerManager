@@ -56,10 +56,24 @@ public sealed class LaunchOrchestrator : IDisposable
     // enforcer uses this to decide whether a newly-arrived HID should be hidden.
     private HashSet<string> _sessionKeepIds = new(StringComparer.OrdinalIgnoreCase);
 
+    // IDs revealed by the Reveal-After-Start phase. They are moved out of _sessionHiddenIds
+    // and into _sessionKeepIds; kept here so ReapplyActiveProfile doesn't hide them again.
+    // Guarded by _sessionStateLock.
+    private HashSet<string> _sessionRevealedIds = new(StringComparer.OrdinalIgnoreCase);
+
+    // IDs the hot-plug enforcer itself hid. Such devices still go through the
+    // "reappeared keep device" check on later passes. Guarded by _sessionStateLock.
+    private HashSet<string> _enforcerHiddenIds = new(StringComparer.OrdinalIgnoreCase);
+
     // Guards _sessionHiddenIds + the HidHide update calls so that the hot-plug
     // enforcer and the reveal loop don't race when they both read or update
     // the session blacklist.
     private readonly object _sessionStateLock = new();
+
+    // KeepEnabled refs (plus revealed DisableThenRestore refs) for the session, used by the
+    // hot-plug enforcer to recognise a kept device that re-enumerated under a new ID.
+    // Mutated only under _sessionStateLock; holds refs from the session-resolved profile copy.
+    private List<DeviceRef> _sessionKeepRefs = [];
 
     // Hot-plug enforcer plumbing. Pure kernel-notification driven — no
     // background polling during steady state. _hotPlugHandler subscribes to
@@ -111,7 +125,19 @@ public sealed class LaunchOrchestrator : IDisposable
         {
             _cts      = new CancellationTokenSource();
             var ct    = _cts.Token;
-            _flowTask = Task.Run(() => RunFlow(profile, attachPid, ct));
+            _flowTask = Task.Run(async () =>
+            {
+                // Resolve stale device IDs against the live set for this session only. If that
+                // throws, fall back to the stored profile; RunFlow's finally still releases the guard.
+                Profile resolved;
+                try { resolved = ResolveForSession(profile); }
+                catch (Exception ex)
+                {
+                    Logger.WriteException("Orchestrator.ResolveForSession", ex);
+                    resolved = profile;
+                }
+                await RunFlow(resolved, attachPid, ct);
+            });
         }
         catch
         {
@@ -119,6 +145,17 @@ public sealed class LaunchOrchestrator : IDisposable
             Interlocked.Exchange(ref _flowActive, 0);
             throw;
         }
+    }
+
+    // Session-only copy of the profile with its device refs pointed at the live devices they
+    // match (see DeviceMatcher.ResolveForSession); warnings go to the session log.
+    private Profile ResolveForSession(Profile profile)
+    {
+        var warnings = new List<string>();
+        var resolved = DeviceMatcher.ResolveForSession(
+            profile, _enumerator.GetAll(showAllHid: true), warnings);
+        foreach (var w in warnings) Log(w);
+        return resolved;
     }
 
     public async Task AbortAsync()
@@ -164,25 +201,36 @@ public sealed class LaunchOrchestrator : IDisposable
         if (ActiveProfile is null || ActiveProfile.Id != updated.Id) return;
         if (!_hidHide.IsAvailable) return;
 
+        updated = ResolveForSession(updated);
+
         // Same predicates as HideDevices — keep the rules in lockstep so
         // a save-while-running yields the same hide set as a fresh launch.
         var allDevices = _enumerator.GetAll(showAllHid: true);
         var keepIds    = ExpandToChildren(updated.KeepEnabled.Select(d => d.InstanceId), allDevices);
-        var toHide     = allDevices
-            .Where(d => !keepIds.Contains(d.InstanceId))
-            .Where(d => !d.IsKeyboardOrMouse)
-            .Where(d => d.AxisCount > 0 || d.ButtonCount > 0)
-            .SelectMany(d => d.ChildInstanceIds.Count > 0 ? d.ChildInstanceIds : [d.InstanceId])
-            .ToList();
+        List<string> toHide;
 
         lock (_sessionStateLock)
         {
+            // Devices already revealed by the reveal phase stay visible.
+            foreach (var id in _sessionRevealedIds) keepIds.Add(id);
+
+            toHide = allDevices
+                .Where(d => !IsKept(keepIds, d))
+                .Where(d => !d.IsKeyboardOrMouse)
+                .Where(d => d.AxisCount > 0 || d.ButtonCount > 0)
+                .SelectMany(d => d.ChildInstanceIds.Count > 0 ? d.ChildInstanceIds : [d.InstanceId])
+                .ToList();
+
             // Replace the session state wholesale rather than computing deltas
             // here. UpdateSessionBlacklist already diffs the new set against
             // _sessionIds (in HidHideClient) and emits the right SetBlacklist
             // call, so we just hand it the new "what should be hidden right now."
             _sessionKeepIds   = new HashSet<string>(keepIds, StringComparer.OrdinalIgnoreCase);
             _sessionHiddenIds = new HashSet<string>(toHide,  StringComparer.OrdinalIgnoreCase);
+            _sessionKeepRefs  = [.. updated.KeepEnabled];
+            foreach (var r in updated.DisableThenRestore)
+                if (ExpandToChildren([r.InstanceId], allDevices).Any(_sessionRevealedIds.Contains))
+                    _sessionKeepRefs.Add(r);
             ActiveProfile     = updated;
             _hidHide.UpdateSessionBlacklist(_sessionHiddenIds);
         }
@@ -343,8 +391,15 @@ public sealed class LaunchOrchestrator : IDisposable
 
         var keepIds = ExpandToChildren(profile.KeepEnabled.Select(d => d.InstanceId), allDevices);
 
+        lock (_sessionStateLock)
+        {
+            _sessionKeepRefs = [.. profile.KeepEnabled];
+            _sessionRevealedIds.Clear();
+            _enforcerHiddenIds.Clear();
+        }
+
         var toHide = allDevices
-            .Where(d => !keepIds.Contains(d.InstanceId))
+            .Where(d => !IsKept(keepIds, d))
             .Where(d => !d.IsKeyboardOrMouse)
             .Where(d => d.AxisCount > 0 || d.ButtonCount > 0) // skip devices with no inputs
             .SelectMany(d => d.ChildInstanceIds.Count > 0 ? d.ChildInstanceIds : [d.InstanceId])
@@ -363,9 +418,13 @@ public sealed class LaunchOrchestrator : IDisposable
         Log($"Hiding {toHide.Count} device(s) (all except {keepIds.Count} always-visible)...");
         _hidHide.BeginGameSession(toHide, keepIds, profile.GameExecutablePath);
 
-        foreach (var d in allDevices.Where(d => !keepIds.Contains(d.InstanceId)))
+        foreach (var d in allDevices.Where(d => !IsKept(keepIds, d)))
             Logger.WriteVerbose($"[Orchestrator]   Hidden: {d.FriendlyName}");
     }
+
+    // A device is kept if its primary OR any sibling interface is in the keep set.
+    private static bool IsKept(HashSet<string> keepIds, HidDevice d) =>
+        keepIds.Contains(d.InstanceId) || d.ChildInstanceIds.Any(keepIds.Contains);
 
     // Given a set of "primary" instance IDs (as stored in the profile), expand to the
     // full set of sibling interface IDs for each matching device. IDs that don't match
@@ -630,13 +689,6 @@ public sealed class LaunchOrchestrator : IDisposable
         State = OrchestratorState.RestoringDevices;
         Log($"Revealing {profile.DisableThenRestore.Count} device(s) in order...");
 
-        // Re-enumerate so we can expand each DeviceRef.InstanceId to all of its
-        // sibling HID interfaces — composite devices need every MI_NN child revealed.
-        // Use showAllHid: true so the expansion can resolve siblings even for
-        // non-gaming-class devices that HideDevices may have hidden.
-        var allDevices = _enumerator.GetAll(showAllHid: true);
-
-        var revealed       = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var phaseStart     = DateTime.UtcNow;
         double lastRevealAtMs = 0;
 
@@ -711,9 +763,25 @@ public sealed class LaunchOrchestrator : IDisposable
             }
 
             Log($"  Revealing: {dev.FriendlyName}  (T+{targetAtMs / 1000.0:0.##}s)");
-            foreach (var id in ExpandToChildren([dev.InstanceId], allDevices))
-                revealed.Add(id);
             lastRevealAtMs = targetAtMs;
+
+            // Fresh enumeration at reveal time so we can expand the ref to all of its sibling
+            // HID interfaces (composite devices need every MI_NN child revealed) and catch a
+            // device that re-enumerated under a new ID since session start. showAllHid: true
+            // so siblings resolve even for non-gaming-class devices HideDevices may have hidden.
+            var fresh = _enumerator.GetAll(showAllHid: true);
+            var rowIds = ExpandToChildren([dev.InstanceId], fresh);
+            if (!fresh.Any(d => DeviceMatcher.IsExact(dev, d)))
+            {
+                foreach (var d in fresh.Where(d => DeviceMatcher.IsIdentityMatch(dev, d)))
+                {
+                    Log($"  '{dev.FriendlyName}' found under a new ID ({d.InstanceId}) - revealing it");
+                    if (d.ChildInstanceIds.Count > 0)
+                        foreach (var c in d.ChildInstanceIds) rowIds.Add(c);
+                    else
+                        rowIds.Add(d.InstanceId);
+                }
+            }
 
             // Lock around the read of _sessionHiddenIds + the HidHide update so
             // we don't race the hot-plug enforcer (which also mutates the set
@@ -721,13 +789,18 @@ public sealed class LaunchOrchestrator : IDisposable
             // alternately stomp each other.
             lock (_sessionStateLock)
             {
-                // Remaining = everything currently in the session hide set, minus what's revealed so far.
+                // Revealed IDs leave the hide set for good (and join the keep set) so the
+                // hot-plug enforcer and ReapplyActiveProfile never hide them again.
                 // _sessionHiddenIds may have grown since session start if the hot-plug enforcer caught
-                // new devices — they should stay hidden through the reveal phase too.
-                var remaining = _sessionHiddenIds
-                    .Where(id => !revealed.Contains(id))
-                    .ToList();
-                _hidHide.UpdateSessionBlacklist(remaining);
+                // new devices — they stay hidden through the reveal phase too.
+                foreach (var id in rowIds)
+                {
+                    _sessionHiddenIds.Remove(id);
+                    _sessionKeepIds.Add(id);
+                    _sessionRevealedIds.Add(id);
+                }
+                _sessionKeepRefs.Add(dev); // a revealed device that re-enumerates is treated like a keep device
+                _hidHide.UpdateSessionBlacklist(_sessionHiddenIds);
             }
         }
 
@@ -791,6 +864,8 @@ public sealed class LaunchOrchestrator : IDisposable
 
         var current = _enumerator.GetAll(showAllHid: true);
         var newlyHidden = new List<HidDevice>();
+        var notes       = new List<string>();
+        bool unhid      = false;
 
         lock (_sessionStateLock)
         {
@@ -800,7 +875,7 @@ public sealed class LaunchOrchestrator : IDisposable
                 // input-less devices (USB hubs that advertise as HID, audio, etc.)
                 if (d.IsKeyboardOrMouse) continue;
                 if (d.AxisCount == 0 && d.ButtonCount == 0) continue;
-                if (_sessionKeepIds.Contains(d.InstanceId)) continue;
+                if (IsKept(_sessionKeepIds, d)) continue;
 
                 // Expand to every sibling HID interface so composite controllers
                 // get every child added, matching HideDevices's expansion.
@@ -808,18 +883,47 @@ public sealed class LaunchOrchestrator : IDisposable
                     ? d.ChildInstanceIds
                     : (IReadOnlyList<string>)[d.InstanceId];
 
+                // Already hidden — unless the enforcer hid it itself, in which case it still
+                // goes through the reappear check below (its old identity may have gone away since).
+                if (ids.All(_sessionHiddenIds.Contains) && !ids.Any(_enforcerHiddenIds.Contains)) continue;
+
+                // A kept device that is absent may have re-enumerated under a new ID
+                // (same serial/model/name). Leave it visible rather than lose the device.
+                var reappeared = _sessionKeepRefs.FirstOrDefault(r =>
+                    !current.Any(x => DeviceMatcher.IsExact(r, x)) &&
+                    DeviceMatcher.IsIdentityMatch(r, d));
+                if (reappeared is not null)
+                {
+                    foreach (var id in ids)
+                    {
+                        _sessionKeepIds.Add(id);
+                        if (_sessionHiddenIds.Remove(id)) unhid = true;
+                        _enforcerHiddenIds.Remove(id);
+                    }
+                    reappeared.InstanceId = d.InstanceId;
+                    notes.Add($"WARNING: '{reappeared.FriendlyName}' reappeared under a new ID ({d.InstanceId}) - left visible");
+                    continue;
+                }
+
                 bool anyNew = false;
                 foreach (var id in ids)
                 {
                     if (_sessionKeepIds.Contains(id)) continue;
-                    if (_sessionHiddenIds.Add(id)) anyNew = true;
+                    if (_sessionHiddenIds.Add(id))
+                    {
+                        anyNew = true;
+                        _enforcerHiddenIds.Add(id);
+                    }
                 }
                 if (anyNew) newlyHidden.Add(d);
             }
 
-            if (newlyHidden.Count == 0) return;
-            _hidHide.UpdateSessionBlacklist(_sessionHiddenIds);
+            if (newlyHidden.Count > 0 || unhid)
+                _hidHide.UpdateSessionBlacklist(_sessionHiddenIds);
         }
+
+        foreach (var n in notes) Log(n);
+        if (newlyHidden.Count == 0) return;
 
         var names = string.Join(", ", newlyHidden.Select(d => d.FriendlyName));
         Log($"Hot-plug: hiding {newlyHidden.Count} new device(s) — {names}");

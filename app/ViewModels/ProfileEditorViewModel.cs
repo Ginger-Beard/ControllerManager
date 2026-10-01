@@ -304,7 +304,8 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         var device = SelectedAvailable;
         if (device is null || IsAssigned(device)) return;
         var vm = new DeviceAssignmentViewModel(
-            device.InstanceId, device.FriendlyName, DeviceRole.AlwaysVisible);
+            device.InstanceId, device.FriendlyName, DeviceRole.AlwaysVisible,
+            identity: DeviceMatcher.CreateRef(device));
         vm.PropertyChanged += OnAssignmentPropertyChanged;
         Assignments.Add(vm);
         IsDirty = true;
@@ -319,7 +320,8 @@ public sealed class ProfileEditorViewModel : ViewModelBase
         foreach (var device in toAdd)
         {
             var vm = new DeviceAssignmentViewModel(
-                device.InstanceId, device.FriendlyName, DeviceRole.AlwaysVisible);
+                device.InstanceId, device.FriendlyName, DeviceRole.AlwaysVisible,
+                identity: DeviceMatcher.CreateRef(device));
             vm.PropertyChanged += OnAssignmentPropertyChanged;
             Assignments.Add(vm);
         }
@@ -427,7 +429,7 @@ public sealed class ProfileEditorViewModel : ViewModelBase
 
         void Add(DeviceRef d, DeviceRole role, double delay = 0)
         {
-            var vm = new DeviceAssignmentViewModel(d.InstanceId, d.FriendlyName, role, delay);
+            var vm = new DeviceAssignmentViewModel(d.InstanceId, d.FriendlyName, role, delay, d);
             vm.PropertyChanged += OnAssignmentPropertyChanged;
             Assignments.Add(vm);
         }
@@ -464,6 +466,13 @@ public sealed class ProfileEditorViewModel : ViewModelBase
                 InstanceId   = a.InstanceId,
                 FriendlyName = a.FriendlyName,
             };
+            if (a.Identity is { } id)
+            {
+                dref.VendorId        = id.VendorId;
+                dref.ProductId       = id.ProductId;
+                dref.Serial          = id.Serial;
+                dref.InterfaceNumber = id.InterfaceNumber;
+            }
             switch (a.Role)
             {
                 case DeviceRole.AlwaysVisible:

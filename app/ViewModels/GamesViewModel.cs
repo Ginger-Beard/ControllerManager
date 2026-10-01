@@ -40,22 +40,26 @@ public sealed class GamesViewModel : ViewModelBase
                 HasSelection = value is not null;
                 if (value is not null)
                 {
-                    var healed = ProfileHealer.Heal(value, [.. _devices.Devices]);
-                    if (healed.Count > 0)
-                    {
-                        HealStatusText = $"Auto-corrected {healed.Count} stale device ID(s): {string.Join(", ", healed)}";
-                        Task.Run(() => _store.Save(_profiles));
-                    }
-                    else
-                    {
-                        HealStatusText = "";
-                    }
+                    var (changed, healed, attention) =
+                        ProfileHealer.HealAll(_profiles, [.. _devices.Devices]);
+                    if (changed) Task.Run(() => _store.Save(_profiles));
+                    HealStatusText = BuildHealStatus(healed, attention);
 
                     Editor.LoadProfile(value);
                 }
                 RefreshShortcutState();
             }
         }
+    }
+
+    private static string BuildHealStatus(List<string> healed, List<string> attention)
+    {
+        var parts = new List<string>();
+        if (healed.Count > 0)
+            parts.Add($"Updated {healed.Count} device ID(s): {string.Join(", ", healed)}");
+        if (attention.Count > 0)
+            parts.Add($"Needs attention: {string.Join("; ", attention)}");
+        return string.Join("  ", parts);
     }
 
     public bool HasSelection
@@ -115,6 +119,29 @@ public sealed class GamesViewModel : ViewModelBase
         Editor        = new ProfileEditorViewModel(devices.Devices, devices.Enumerator);
 
         foreach (var p in _profiles) Profiles.Add(p);
+
+        // Backfill identity fields / heal stale IDs shortly after startup so it doesn't
+        // depend on the user opening the Games tab. Enumerate off the UI thread, then
+        // apply the heal and save back on it.
+        Task.Run(() =>
+        {
+            try
+            {
+                var live = devices.Enumerator.GetAll(showAllHid: true);
+                Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    try
+                    {
+                        var (changed, healed, attention) = ProfileHealer.HealAll(_profiles, live);
+                        if (changed) _store.Save(_profiles);
+                        if (healed.Count > 0 || attention.Count > 0)
+                            Logger.Write($"[ProfileHealer] Startup heal: {healed.Count} updated, {attention.Count} need attention");
+                    }
+                    catch (Exception ex) { Logger.WriteException("GamesViewModel startup heal", ex); }
+                });
+            }
+            catch (Exception ex) { Logger.WriteException("GamesViewModel startup heal", ex); }
+        });
 
         NewProfileCommand = new RelayCommand(_ =>
         {

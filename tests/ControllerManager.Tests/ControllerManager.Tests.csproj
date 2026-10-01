@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>ControllerManager.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*" />
+    <PackageReference Include="xunit" Version="2.*" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.*" />
+  </ItemGroup>
+
+  <!-- Source-linked from the WinExe app project (no WPF types are needed by these files). -->
+  <ItemGroup>
+    <Compile Include="..\..\app\Services\DeviceMatcher.cs" Link="App\DeviceMatcher.cs" />
+    <Compile Include="..\..\app\Services\ProfileHealer.cs" Link="App\ProfileHealer.cs" />
+    <Compile Include="..\..\app\Services\Logger.cs" Link="App\Logger.cs" />
+    <Compile Include="..\..\app\Models\Profile.cs" Link="App\Profile.cs" />
+    <Compile Include="..\..\app\Models\HidDevice.cs" Link="App\HidDevice.cs" />
+    <Compile Include="..\..\app\Models\AppSettings.cs" Link="App\AppSettings.cs" />
+  </ItemGroup>
+</Project>

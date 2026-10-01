@@ -17,6 +17,11 @@ public sealed class HidDevice : INotifyPropertyChanged
     public          int    AxisCount           { get; set; }
     public          int    ButtonCount         { get; set; }
 
+    /// <summary>Normalised USB serial of the parent USB device; "" if none.</summary>
+    public          string UsbSerial           { get; set; } = "";
+    /// <summary>HID interface number parsed from the primary InstanceId (e.g. "02"); "" if none.</summary>
+    public          string InterfaceNumber     { get; set; } = "";
+
     /// <summary>HID top-level UsagePage. 0 if the device couldn't be opened.</summary>
     public          ushort UsagePage           { get; set; }
     /// <summary>HID top-level Usage. 0 if the device couldn't be opened.</summary>

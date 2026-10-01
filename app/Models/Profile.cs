@@ -109,6 +109,26 @@ public class DeviceRef
     /// </summary>
     [JsonPropertyName("delaySeconds")]
     public double DelaySeconds { get; set; } = 0;
+
+    // Identity fields backfilled from the live device so a ref survives the device
+    // re-enumerating under a new instance ID. null = not backfilled yet; "" = known absent.
+    [JsonPropertyName("vendorId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? VendorId { get; set; }
+
+    [JsonPropertyName("productId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ProductId { get; set; }
+
+    /// <summary>Normalised USB serial (see DeviceMatcher.NormalizeSerial).</summary>
+    [JsonPropertyName("serial")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Serial { get; set; }
+
+    /// <summary>HID interface number, two hex chars (e.g. "02").</summary>
+    [JsonPropertyName("interfaceNumber")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? InterfaceNumber { get; set; }
 }
 
 public enum TriggerMode { HandleWatcher, Timer }

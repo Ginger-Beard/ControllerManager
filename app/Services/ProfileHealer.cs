@@ -1,61 +1,80 @@
-using System.Text.RegularExpressions;
 using ControllerManager.Models;
 
 namespace ControllerManager.Services;
 
 public static class ProfileHealer
 {
-    private static readonly Regex VidRx =
-        new(@"VID_([0-9A-Fa-f]{4})", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex PidRx =
-        new(@"PID_([0-9A-Fa-f]{4})", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
     /// <summary>
-    /// For each DeviceRef whose InstanceId is no longer present in liveDevices, searches
-    /// for a replacement by VID+PID with FriendlyName as the tiebreaker. Mutates the
-    /// DeviceRef in place and returns a description of each healed entry so the caller
-    /// can surface it to the user.
+    /// Reconciles every DeviceRef in every profile against the live devices via
+    /// <see cref="DeviceMatcher.Resolve"/>. Only Exact (backfill) and Serial (new instance
+    /// ID) matches are written to the refs; Model/Name/Ambiguous/Unresolved are never
+    /// persisted and are reported in <c>attention</c> where useful. <c>healed</c> lists
+    /// refs whose instance ID was rewritten.
     /// </summary>
-    public static List<string> Heal(Profile profile, IReadOnlyList<HidDevice> liveDevices)
+    public static (bool changed, List<string> healed, List<string> attention) HealAll(
+        IList<Profile> profiles, IReadOnlyList<HidDevice> live)
     {
-        var healed  = new List<string>();
-        var liveIds = liveDevices.ToDictionary(d => d.InstanceId, StringComparer.OrdinalIgnoreCase);
+        bool changed = false;
+        var healed    = new List<string>();
+        var attention = new List<string>();
 
-        // Only heal lists that drive device toggling; KeepEnabled is informational only.
-        var allRefs = profile.DisableThenRestore
-            .Concat(profile.KeepDisabled);
-
-        foreach (var r in allRefs)
+        foreach (var profile in profiles)
         {
-            if (liveIds.ContainsKey(r.InstanceId)) continue;
-
-            var vid = VidRx.Match(r.InstanceId).Groups[1].Value.ToUpperInvariant();
-            var pid = PidRx.Match(r.InstanceId).Groups[1].Value.ToUpperInvariant();
-            if (string.IsNullOrEmpty(vid) || string.IsNullOrEmpty(pid)) continue;
-
-            var candidates = liveDevices
-                .Where(d => d.VendorId.Equals(vid, StringComparison.OrdinalIgnoreCase)
-                         && d.ProductId.Equals(pid, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-            HidDevice? match = candidates.Count switch
+            foreach (var m in DeviceMatcher.Resolve(profile, live))
             {
-                0 => null,
-                1 => candidates[0],
-                _ => candidates.FirstOrDefault(d =>
-                         d.FriendlyName.Equals(r.FriendlyName, StringComparison.OrdinalIgnoreCase))
-                     ?? candidates.FirstOrDefault(d =>
-                         d.FriendlyName.Contains(r.FriendlyName, StringComparison.OrdinalIgnoreCase))
-            };
+                var r = m.Ref;
 
-            if (match is null) continue;
+                if (m.Ambiguous)
+                {
+                    attention.Add($"'{r.FriendlyName}' ({profile.Name}): {m.Devices.Count} identical devices");
+                    continue;
+                }
 
-            Logger.Write($"[ProfileHealer] Healed '{r.FriendlyName}': {r.InstanceId} → {match.InstanceId}");
-            r.InstanceId          = match.InstanceId;
-            r.DeviceInterfacePath = match.DeviceInterfacePath;
-            healed.Add(r.FriendlyName);
+                switch (m.Tier)
+                {
+                    case MatchTier.Exact:
+                        if (DeviceMatcher.Backfill(r, m.Devices[0])) changed = true;
+                        break;
+
+                    case MatchTier.Serial:
+                        var d = m.Devices[0];
+                        // Another ref in this profile already points at that device.
+                        bool taken = AllRefs(profile).Any(o => !ReferenceEquals(o, r) &&
+                            (o.InstanceId.Equals(d.InstanceId, StringComparison.OrdinalIgnoreCase) ||
+                             d.ChildInstanceIds.Contains(o.InstanceId, StringComparer.OrdinalIgnoreCase)));
+                        if (taken) break;
+
+                        // Placeholder serials can pair different products: only persist when the
+                        // product is unchanged or the name still agrees.
+                        if (!DeviceMatcher.PidEq(r, d) && !DeviceMatcher.NameEq(r.FriendlyName, d.FriendlyName))
+                        {
+                            attention.Add($"'{r.FriendlyName}' ({profile.Name}): matched by serial under a different product ID (not saved)");
+                            break;
+                        }
+
+                        Logger.Write($"[ProfileHealer] '{profile.Name}' serial: {r.InstanceId} -> {d.InstanceId}");
+                        r.InstanceId          = d.InstanceId;
+                        r.DeviceInterfacePath = d.DeviceInterfacePath;
+                        DeviceMatcher.Backfill(r, d);
+                        healed.Add(r.FriendlyName);
+                        changed = true;
+                        break;
+
+                    case MatchTier.Model:
+                    case MatchTier.Name:
+                        attention.Add($"'{r.FriendlyName}' ({profile.Name}): matched by {m.Tier.ToString().ToLowerInvariant()} this session, not saved");
+                        break;
+                }
+            }
         }
 
-        return healed;
+        return (changed, healed, attention);
     }
+
+    /// <summary>Single-profile wrapper; returns the names of refs whose instance ID was rewritten.</summary>
+    public static List<string> Heal(Profile profile, IReadOnlyList<HidDevice> liveDevices) =>
+        HealAll([profile], liveDevices).healed;
+
+    private static IEnumerable<DeviceRef> AllRefs(Profile p) =>
+        p.KeepEnabled.Concat(p.DisableThenRestore).Concat(p.KeepDisabled);
 }
