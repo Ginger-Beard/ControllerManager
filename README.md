@@ -105,9 +105,10 @@ via kernel ETW — then waits 1.5 seconds (your "post-acquisition delay") so the
 game has time to lock the wheel as controller slot #1 before revealing the
 rest.
 
-> **MOZA tip:** turn on **Forza Compatibility Mode** in Pit House so the wheel
-> presents as a Fanatec (VID `0EB7`). FH6 detects Fanatec directly via its native
-> SDK and routes FFB through it cleanly.
+> **MOZA tip:** turn on **Forza Compatibility Mode** in Pit House. The mode
+> changes the USB product ID the base reports (an R12 shows up as `346E:0016`
+> with it on and `346E:0006` with it off), and FH6 only behaves with it on —
+> see [Troubleshooting](#troubleshooting) if the game starts crashing on launch.
 
 > **If your wheel still doesn't get slot #1:** bump **Wait this many seconds
 > after:** to 2.0 or 2.5 seconds. Some games take longer to commit slot
@@ -352,6 +353,24 @@ known-broken list.
 - For FH6 / Forza Motorsport specifically: confirm Forza Compatibility Mode is on
   in Pit House (MOZA) or equivalent in your wheel software.
 - Check that your **wheel base** is set to **Always Visible** in the profile.
+
+**FH6 crashes before the main menu ("Error: Game Crash, Code: FHE01") with a MOZA base**
+- Check Forza Compatibility Mode in Pit House. With it off, the base reports a
+  different USB product ID and FH6 crashes in Windows' force-feedback driver
+  (`pid.dll` in the Windows Application event log). A Pit House change or
+  preset can switch it off without you noticing.
+- Turn it back on and power-cycle the base. To confirm the base is the
+  trigger first, remove it from the profile's Always Visible list and start
+  the game from the Dashboard — if FH6 reaches the menu, it's the base.
+- Steam's "verify integrity" will report 2 bad files for FH6
+  (`inputmappingprofiles.zip`, `wheeltunablesettingspc.zip`). Those are Pit
+  House's wheel profiles, not corruption, and replacing them doesn't fix this.
+
+**"My profiles lost the wheel base and a second one appeared in the list"**
+- The base changed its USB identity (compatibility mode toggle or firmware
+  update), so Windows sees a new device. Controller Manager follows a device
+  by serial number across that kind of change and keeps it visible; if a
+  profile still shows "Needs attention", re-add the base once and save.
 
 **"My wheel ended up as slot #2 (or #3)"**
 - If the "Wait until the game opens the first device" checkbox is on, the

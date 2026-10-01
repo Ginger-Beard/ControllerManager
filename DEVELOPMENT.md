@@ -180,6 +180,84 @@ consolidate peripheral inputs onto a single vJoy device; expose only wheel
 users report "FFB works but other devices aren't recognized" with FH and a
 full rig, the consolidation pattern is the answer.
 
+### MOZA game compatibility mode changes the base's USB identity
+Pit House has a wheelbase **game compatibility mode** (the README calls it
+Forza Compatibility Mode; Pit House's log calls it `基座方向盘游戏兼容模式` /
+`Game Mode`). Toggling it changes the USB **product ID** the base reports, so
+Windows treats it as a different device. Observed on the dev rig's R12
+(Sept 2026, Pit House 1.3.9.35, base firmware 1.2.9.24):
+
+| State | Base enumerates as | FH6 |
+|---|---|---|
+| Mode on | `USB\VID_346E&PID_0016\<serial>` | Works — every long FH6 session on record |
+| Mode off (`Game Mode 0`) | `USB\VID_346E&PID_0006\<serial>` | Crashes before the main menu |
+
+What was verified on the rig (2026-09-30):
+- **The crash:** Pit House logged `设置new Game Mode 0` on 2026-09-28. With the
+  `0006` base visible, FH6 died six times with an access violation in
+  `C:\Windows\System32\pid.dll` (the DirectInput force-feedback driver, same
+  fault offset each time, shown in-game as "Error: Game Crash, Code: FHE01").
+  It crashed with CM hiding devices and with CM doing nothing, on stock and
+  on Pit-House-patched game files, and after a reboot. With the base hidden
+  by the profile, FH6 reached the menu and exited cleanly; with only the base
+  visible (vJoy hidden) it still crashed.
+- **The mode is the switch:** setting the mode back on and power-cycling the
+  base brought it back as `0016`, and FH6 then ran. MOZA's own driver INF
+  labels the `001x` product IDs "Compatible". No Fanatec-VID (`0EB7`) device
+  has ever been installed on this rig.
+- **The mode only applies when the base restarts.** Writing it (Pit House, or
+  the serial command boxflat documents as `main / set-compat-mode`) is stored
+  immediately but the USB identity does not change until the base is
+  power-cycled. With the mode stored as on but the base still enumerated as
+  `0006`, FH6 crashed the same way. Restarting Pit House as administrator did
+  not trigger the switch, and `pnputil /restart-device` was refused because
+  other programs had the device open.
+- **Pit House wants admin rights while the mode is on.** It shows a "provide
+  administrator permission to install the MOZA Windows Driver" prompt on
+  every start; its log shows the driver is already installed and the real
+  complaint is `没有管理员权限` (no administrator privileges).
+- **MOZA says to turn it off for other games** because of force feedback
+  (support article "Forza Horizon 4 & 5 FFB Configuration"). Pit House cannot
+  switch it per game.
+- **Not the mode:** a firmware update also makes the base re-enumerate, and
+  once produced a transient `0006` identity with the serial's bytes swapped
+  within each 32-bit word (`003C0022…` vs `22003C00…`).
+
+What differs between the two identities, as Windows registers them under
+`HKCU\System\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\OEM\`:
+
+| | `VID_346E&PID_0006` | `VID_346E&PID_0016` |
+|---|---|---|
+| `OEMData` | `43 00 88 01 FE 00 00 00` | `03 00 88 11 80 00 00 00` |
+| Button count (second DWORD) | 254 | 128 |
+| Car-controller flag (`0x40`) | set | clear |
+| Force-feedback driver, attributes, effect list | identical (`pid.dll`, same 11 effects) | identical |
+
+So the mode changes how the device is *described* (type flag and button
+count); the registered force-feedback capabilities are the same. Whether the
+firmware also changes how forces feel is not visible from the host.
+
+Related facts worth knowing when debugging FH + MOZA:
+- Pit House patches two FH6 files, `media\inputmappingprofiles.zip` and
+  `media\wheeltunablesettingspc.zip`, from its
+  `bin\GameConfigs\Forza Horizon 6\` folder. Steam's "verify integrity" reports
+  them as 2 bad files and restores stock copies, which contain no MOZA entry.
+  The shipped R12 profile is keyed to `0x346E0006` only and maps
+  gas/brake/clutch to the base's own axes.
+- `pid.dll` is only loaded for devices registered for DirectInput force
+  feedback. On this rig that is the MOZA base and vJoy; hiding one or the other
+  with a profile (launched from the Dashboard so the hide precedes the game)
+  is the quickest way to tell which one a `pid.dll` crash belongs to.
+
+**Why CM cares:** profiles used to store only the full instance path, so each
+identity change lost the base from every profile and then *hid* it as an
+unknown device. `DeviceMatcher` now follows a device across a product-ID or
+serial-format change (same vendor + normalised serial, and same PID, name or
+interface number); see "Device identity matching" under Reference. Confirmed
+on the rig: after the base returned as `0016`, `ProfileHealer` rewrote the
+Moza entry in all five profiles by serial and the next FH6 session kept it
+visible with no resave.
+
 ### Reveal phase limit
 Works only for hot-plug-aware games (WGI, RawInput, modern XInput). Pure legacy
 DirectInput-only games that do one startup scan and never re-enumerate will see
@@ -398,7 +476,36 @@ In v2 the stored value's *runtime* interpretation depends on
 | `disableThenRestore[]` | DeviceRef[] | [] | Reveal After Start, in order |
 | `keepDisabled[]` | DeviceRef[] | [] | Always Hidden devices |
 
-`DeviceRef`: `{ instanceId, deviceInterfacePath, friendlyName, delaySeconds }`.
+`DeviceRef`: `{ instanceId, deviceInterfacePath, friendlyName, delaySeconds }`
+plus four optional identity fields, `vendorId`, `productId`, `serial`,
+`interfaceNumber`. They are omitted from the JSON until backfilled (`null` =
+not yet backfilled, `""` = known absent), so older profiles load unchanged.
+
+### Device identity matching
+`DeviceMatcher` resolves every `DeviceRef` against the live devices before a
+session, on profile reapply, and in `ProfileHealer`. Tiers, first hit wins:
+
+| Tier | Rule | Written back to profiles.json |
+|---|---|---|
+| Exact | `instanceId` equals the device's ID or one of its child IDs | Identity fields only (backfill) |
+| Serial | Same vendor + normalised serial, and same PID, same name, or same interface number | Only if the PID is unchanged or the name matches |
+| Model | Same vendor + product + interface, no serial conflict | Never |
+| Name | Same friendly name (and vendor, when the ref has one) | Never |
+
+- The serial is read from the USB parent node (`DeviceEnumerator.GetUsbSerial`);
+  port-derived tokens (containing `&`) and placeholder serials count as none.
+  `NormalizeSerial` treats a hex serial and its per-32-bit-word byte swap as
+  the same value.
+- More than one candidate at a tier is **ambiguous**: for Always Visible and
+  Reveal After Start every candidate stays visible for the session, with a
+  warning; nothing is saved. Always Hidden uses Exact and Serial only.
+- Hiding a wanted device costs the user their input; leaving an extra one
+  visible costs at worst double input. Every loose rule resolves toward
+  visible, including the hot-plug enforcer when a kept device reappears under
+  a new ID mid-session.
+- `ProfileHealer.HealAll` runs once at startup and on profile selection. It
+  covers all three lists, including Always Visible.
+- Tests: `tests/ControllerManager.Tests` (`dotnet.exe test`).
 
 ### ProfileStore.Changed event
 Fires after every successful Save. Subscribers should re-Load their in-memory
@@ -977,9 +1084,11 @@ contract-level and only nefarius can answer them.
 - **Sunshine/Apollo**: build a profile while a remote session is active;
   verify the virtual gamepad shows up in the picker; verify physical
   controllers stay hidden during the stream.
-- **Profile ID healing**: cause a device's instance ID to change (USB reseat,
-  port change). Reopen the profile in the Games tab — `ProfileHealer` should
-  rewrite it silently and show the orange status banner.
+- **Profile ID healing**: cause a device's instance ID to change. A device with
+  a real serial (e.g. toggle MOZA game compatibility mode) should be rewritten
+  in profiles.json and reported as "Updated N device ID(s)". A serial-less
+  device moved to another port should stay visible in a session but only
+  show "Needs attention" — it is matched by model and deliberately not saved.
 - **Devices tab toggle**: verify on/off persists across app restarts; verify
   the BL is cleared cleanly on `Hide all → ON, then OFF` cycle.
 - **Composite HID**: with a device that exposes multiple HID interfaces (G29,
